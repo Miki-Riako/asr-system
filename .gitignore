@@ -1,4 +1,6 @@
 .markdown
+asr-system-frontend/node_modules
+asr-system-frontend/package-lock.json
 
 
 # Byte-compiled / optimized / DLL files
