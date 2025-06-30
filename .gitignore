@@ -1,7 +1,8 @@
 .markdown
-asr-system-frontend/node_modules
-asr-system-frontend/package-lock.json
+asr_system_frontend/node_modules
+asr_system_frontend/package-lock.json
 
+asr_system.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
