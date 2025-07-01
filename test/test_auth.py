@@ -43,4 +43,27 @@ def test_login_wrong_password(test_user):
 def test_login_nonexistent_user():
     resp = client.post("/auth/login", json={"username": "nouser", "password": "any"})
     assert resp.status_code == 401
-    assert resp.json()["detail"] == "用户名或密码错误" 
+    assert resp.json()["detail"] == "用户名或密码错误"
+
+def test_login_and_get_token(test_user):
+    resp = client.post("/auth/login", json=test_user)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    token = data["access_token"]
+    # 用token访问/me
+    me_resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_resp.status_code == 200
+    me_data = me_resp.json()
+    assert me_data["username"] == test_user["username"]
+    assert "user_id" in me_data
+    assert "created_at" in me_data
+
+def test_me_with_invalid_token():
+    resp = client.get("/auth/me", headers={"Authorization": "Bearer invalidtoken"})
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "无效的认证凭据"
+
+def test_me_without_token():
+    resp = client.get("/auth/me")
+    assert resp.status_code == 401 
