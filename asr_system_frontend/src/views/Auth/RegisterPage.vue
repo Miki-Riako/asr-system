@@ -27,6 +27,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
+import axios from 'axios';
 
 const router = useRouter();
 const form = ref({ username: '', password: '', confirmPassword: '' });
@@ -42,9 +43,15 @@ function onSubmit() {
     return;
   }
   errorMsg.value = '';
-  // 这里预留API集成，注册成功后跳转登录
-  alert('注册成功！将返回登录页面。');
-  router.push('/login');
+  axios.post('/auth/register', {
+    username: form.value.username,
+    password: form.value.password
+  }).then(() => {
+    alert('注册成功！将返回登录页面。');
+    router.push('/login');
+  }).catch(err => {
+    errorMsg.value = err.response?.data?.detail || '注册失败';
+  });
 }
 </script>
 

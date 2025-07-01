@@ -30,6 +30,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
+import axios from 'axios';
 
 const router = useRouter();
 const form = ref({ username: '', password: '', captcha: '' });
@@ -56,8 +57,16 @@ function onSubmit() {
     return;
   }
   errorMsg.value = '';
-  // 这里预留API集成，成功后跳转主页
-  router.push('/');
+  axios.post('/auth/login', {
+    username: form.value.username,
+    password: form.value.password
+  }).then(res => {
+    localStorage.setItem('token', res.data.access_token);
+    router.push('/');
+  }).catch(err => {
+    errorMsg.value = err.response?.data?.detail || '登录失败';
+    generateCaptcha();
+  });
 }
 
 generateCaptcha();
