@@ -17,7 +17,7 @@
         </el-form-item>
         <div v-if="errorMsg" class="text-red-500 text-sm text-center mb-2">{{ errorMsg }}</div>
         <el-form-item>
-          <el-button type="primary" size="large" class="w-full" @click="onSubmit">登录</el-button>
+          <el-button type="primary" size="large" class="w-full" @click="onSubmit" :loading="loading">登录</el-button>
         </el-form-item>
         <div class="text-sm text-center mt-4">
           还没有账号？<router-link to="/register" class="text-blue-400 hover:underline">立即注册</router-link>
@@ -30,12 +30,13 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import axios from 'axios';
+import { authAPI } from '../../services/api';
 
 const router = useRouter();
 const form = ref({ username: '', password: '', captcha: '' });
 const errorMsg = ref('');
 const captcha = ref('');
+const loading = ref(false);
 
 function generateCaptcha() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -46,7 +47,7 @@ function generateCaptcha() {
   captcha.value = result;
 }
 
-function onSubmit() {
+async function onSubmit() {
   if (!form.value.username || !form.value.password || !form.value.captcha) {
     errorMsg.value = '所有字段均为必填项。';
     return;
@@ -56,17 +57,20 @@ function onSubmit() {
     generateCaptcha();
     return;
   }
+
+  loading.value = true;
   errorMsg.value = '';
-  axios.post('/auth/login', {
-    username: form.value.username,
-    password: form.value.password
-  }).then(res => {
-    localStorage.setItem('token', res.data.access_token);
+
+  try {
+    const res = await authAPI.login(form.value.username, form.value.password);
+    localStorage.setItem('token', res.access_token);
     router.push('/');
-  }).catch(err => {
-    errorMsg.value = err.response?.data?.detail || '登录失败';
+  } catch (err) {
+    errorMsg.value = err.response?.data?.detail || '登录失败，请检查用户名和密码';
     generateCaptcha();
-  });
+  } finally {
+    loading.value = false;
+  }
 }
 
 generateCaptcha();

@@ -14,7 +14,7 @@
         </el-form-item>
         <div v-if="errorMsg" class="text-red-500 text-sm text-center mb-2">{{ errorMsg }}</div>
         <el-form-item>
-          <el-button type="primary" size="large" class="w-full" @click="onSubmit">注册</el-button>
+          <el-button type="primary" size="large" class="w-full" @click="onSubmit" :loading="loading">注册</el-button>
         </el-form-item>
         <div class="text-sm text-center mt-4">
           已有账号？<router-link to="/login" class="text-blue-400 hover:underline">立即登录</router-link>
@@ -27,13 +27,15 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import axios from 'axios';
+import { authAPI } from '../../services/api';
+import { ElMessage } from 'element-plus';
 
 const router = useRouter();
 const form = ref({ username: '', password: '', confirmPassword: '' });
 const errorMsg = ref('');
+const loading = ref(false);
 
-function onSubmit() {
+async function onSubmit() {
   if (!form.value.username || !form.value.password || !form.value.confirmPassword) {
     errorMsg.value = '所有字段均为必填项。';
     return;
@@ -42,16 +44,22 @@ function onSubmit() {
     errorMsg.value = '两次输入的密码不一致。';
     return;
   }
+  
+  loading.value = true;
   errorMsg.value = '';
-  axios.post('/auth/register', {
-    username: form.value.username,
-    password: form.value.password
-  }).then(() => {
-    alert('注册成功！将返回登录页面。');
+  
+  try {
+    await authAPI.register(form.value.username, form.value.password);
+    ElMessage({
+      message: '注册成功！将返回登录页面。',
+      type: 'success'
+    });
     router.push('/login');
-  }).catch(err => {
+  } catch (err) {
     errorMsg.value = err.response?.data?.detail || '注册失败';
-  });
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 

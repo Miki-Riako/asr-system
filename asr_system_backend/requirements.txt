@@ -4,4 +4,6 @@ sqlalchemy
 pydantic[email]
 python-jose[cryptography]
 passlib[bcrypt]
-alembic 
+alembic
+python-multipart
+pytest 
