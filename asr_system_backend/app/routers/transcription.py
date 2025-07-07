@@ -4,6 +4,8 @@ from typing import List, Optional
 from .. import schemas, services, models
 from ..database import get_db
 from .auth import get_current_user
+from ..config import get_settings
+from ..asr_engine import get_asr_engine
 import os
 import uuid
 from datetime import datetime
@@ -13,9 +15,9 @@ router = APIRouter(
     tags=["transcription"]
 )
 
-# 配置上传文件保存的路径
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# 获取配置
+settings = get_settings()
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 @router.post("/transcribe/file", response_model=schemas.TranscriptionTaskOut)
 async def transcribe_file(
@@ -28,13 +30,22 @@ async def transcribe_file(
     """
     上传音频文件并创建一个转写任务
     """
-    # 文件类型验证
-    allowed_types = ["audio/mpeg", "audio/wav", "audio/mp3"]
-    content_type = file.content_type
-    if content_type not in allowed_types:
+    # 文件大小检查
+    file_content = await file.read()
+    if len(file_content) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"文件大小超过限制 ({settings.ASR_MAX_FILE_SIZE_MB}MB)"
+        )
+    
+    # 文件扩展名验证
+    asr_engine = get_asr_engine()
+    file_ext = os.path.splitext(file.filename.lower())[1] if file.filename else ""
+    if file_ext not in asr_engine.get_supported_formats():
+        supported_formats = ", ".join(asr_engine.get_supported_formats())
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"不支持的文件格式: {content_type}，请上传mp3或wav格式文件"
+            detail=f"不支持的文件格式: {file_ext}，支持的格式: {supported_formats}"
         )
     
     # 保存文件
@@ -53,7 +64,6 @@ async def transcribe_file(
     
     # 写入文件
     with open(file_path, "wb") as buffer:
-        file_content = await file.read()
         buffer.write(file_content)
     
     # 添加后台任务（模拟异步处理转写）

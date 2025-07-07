@@ -4,6 +4,7 @@ from typing import List
 from .. import schemas, models
 from ..database import get_db
 from .auth import get_current_user
+from ..rag_service import get_rag_service
 import csv
 from io import StringIO
 
@@ -50,6 +51,14 @@ def create_hotword(
     db.add(db_hotword)
     db.commit()
     db.refresh(db_hotword)
+    
+    # 重建用户的RAG索引
+    try:
+        rag_service = get_rag_service()
+        if rag_service.initialized:
+            rag_service.build_user_hotword_index(db, current_user.id)
+    except Exception as e:
+        print(f"重建RAG索引失败: {str(e)}")
     
     return db_hotword
 
@@ -116,6 +125,14 @@ def update_hotword(
     db.commit()
     db.refresh(hotword)
     
+    # 重建用户的RAG索引
+    try:
+        rag_service = get_rag_service()
+        if rag_service.initialized:
+            rag_service.build_user_hotword_index(db, current_user.id)
+    except Exception as e:
+        print(f"重建RAG索引失败: {str(e)}")
+    
     return hotword
 
 @router.delete("/{hotword_id}")
@@ -147,6 +164,14 @@ def delete_hotword(
     # 删除热词
     db.delete(hotword)
     db.commit()
+    
+    # 重建用户的RAG索引
+    try:
+        rag_service = get_rag_service()
+        if rag_service.initialized:
+            rag_service.build_user_hotword_index(db, current_user.id)
+    except Exception as e:
+        print(f"重建RAG索引失败: {str(e)}")
     
     return {"message": "热词已成功删除"}
 
@@ -233,6 +258,14 @@ async def bulk_import_hotwords(
         
         # 提交事务
         db.commit()
+        
+        # 重建用户的RAG索引
+        try:
+            rag_service = get_rag_service()
+            if rag_service.initialized:
+                rag_service.build_user_hotword_index(db, current_user.id)
+        except Exception as e:
+            print(f"重建RAG索引失败: {str(e)}")
         
         return {
             "added_count": added_count,

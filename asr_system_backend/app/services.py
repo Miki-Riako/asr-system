@@ -4,16 +4,20 @@ from . import models, schemas
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta, UTC
 from jose import JWTError, jwt
+from .rag_service import get_rag_service
+from .asr_engine import get_asr_engine
+from .config import get_settings
 import os
 import time
 import random
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 使用环境变量获取密钥，如果不存在则使用默认值（仅用于开发环境）
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "!!!secret_key!!!")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+# 获取配置
+settings = get_settings()
+SECRET_KEY = settings.JWT_SECRET_KEY
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 class AuthService:
     @staticmethod
@@ -67,7 +71,7 @@ class TranscriptionService:
     @staticmethod
     def process_transcription_task(db: Session, task_id: str, file_path: str, hotword_list_id: str = None):
         """
-        处理转写任务的后台方法（在实际项目中会调用ASR引擎，这里只是模拟）
+        处理转写任务的后台方法，使用真实的ASR引擎进行音频转写
         """
         try:
             # 更新任务状态为处理中
@@ -79,14 +83,47 @@ class TranscriptionService:
             task.status = "processing"
             db.commit()
             
-            # 模拟处理时间
-            time.sleep(5)  # 实际项目中会替换为实际的ASR处理
+            # 获取ASR引擎实例
+            asr_engine = get_asr_engine()
             
-            # 模拟生成转写结果
-            mock_segments = TranscriptionService._generate_mock_segments(task_id, 10)
+            # 如果启用了热词功能，初始化RAG服务
+            rag_service = get_rag_service()
+            if hotword_list_id and not rag_service.initialized:
+                rag_service.initialize()
+            
+            # 为用户构建热词索引（如果启用热词功能）
+            if hotword_list_id:
+                rag_service.build_user_hotword_index(db, task.user_id)
+            
+            # 验证音频文件
+            if not asr_engine.validate_audio_file(file_path):
+                raise ValueError(f"无效的音频文件: {file_path}")
+            
+            # 预处理音频文件
+            processed_file_path = asr_engine.preprocess_audio(file_path)
+            
+            # 使用ASR引擎进行转写
+            transcription_result = asr_engine.transcribe_audio(processed_file_path)
+            
+            # 提取分段结果
+            segments = transcription_result.get("segments", [])
+            
+            # 如果启用了热词功能，对每个分段进行增强
+            if hotword_list_id and rag_service.initialized:
+                for segment in segments:
+                    enhancement = rag_service.enhance_transcription_with_hotwords(
+                        segment["text"], task.user_id
+                    )
+                    # 使用增强后的文本
+                    segment["text"] = enhancement["enhanced_text"]
+                    # 应用置信度提升
+                    segment["confidence"] = min(
+                        segment["confidence"] * enhancement["confidence_boost"], 
+                        0.99
+                    )
             
             # 添加分段结果到数据库
-            for segment in mock_segments:
+            for segment in segments:
                 db_segment = models.TranscriptionSegment(
                     task_id=task_id,
                     segment_id=segment["segment_id"],
@@ -102,6 +139,13 @@ class TranscriptionService:
             task.completed_at = datetime.now(UTC)
             db.commit()
             
+            # 清理临时文件
+            if os.path.exists(processed_file_path) and processed_file_path != file_path:
+                try:
+                    os.remove(processed_file_path)
+                except:
+                    pass  # 忽略删除错误
+                    
         except Exception as e:
             # 记录错误并更新任务状态
             print(f"处理任务 {task_id} 时发生错误: {str(e)}")

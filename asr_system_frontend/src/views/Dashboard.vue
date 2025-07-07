@@ -24,7 +24,7 @@
           <div class="text-gray-400">
             上传音频文件，系统会自动进行转写并返回文本结果。
           </div>
-          <el-button type="primary" class="mt-4 w-full">开始转写</el-button>
+          <el-button type="primary" class="mt-4 w-full" @click="$router.push('/transcribe')">开始转写</el-button>
         </el-card>
         
         <el-card class="bg-gray-800 border-none shadow-lg hover:shadow-xl transition-all">
@@ -37,7 +37,7 @@
           <div class="text-gray-400">
             使用麦克风进行实时录音，系统会即时转写您的语音内容。
           </div>
-          <el-button type="success" class="mt-4 w-full">开始录音</el-button>
+          <el-button type="success" class="mt-4 w-full" disabled>即将推出</el-button>
         </el-card>
         
         <el-card class="bg-gray-800 border-none shadow-lg hover:shadow-xl transition-all">
@@ -50,7 +50,7 @@
           <div class="text-gray-400">
             添加和管理您的专业领域词汇，提高语音识别准确率。
           </div>
-          <el-button type="warning" class="mt-4 w-full">管理热词</el-button>
+          <el-button type="warning" class="mt-4 w-full" @click="$router.push('/hotwords')">管理热词</el-button>
         </el-card>
       </div>
       
@@ -132,8 +132,7 @@ function logout() {
 }
 
 function viewTask(task) {
-  // 实际项目中可跳转到任务详情页
-  console.log('查看任务', task);
+  router.push(`/task/${task.id}`);
 }
 
 function getStatusType(status) {

@@ -7,4 +7,13 @@ passlib[bcrypt]
 bcrypt
 alembic
 python-multipart
-pytest 
+pytest
+faiss-cpu
+numpy
+sentence-transformers
+scikit-learn
+openai-whisper
+torch
+torchaudio
+librosa
+soundfile 
