@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from . import models, schemas
 from fastapi import HTTPException, status
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from jose import JWTError, jwt
 import os
 import time
@@ -46,7 +46,10 @@ class AuthService:
     @staticmethod
     def create_access_token(data: dict, expires_delta: timedelta = None):
         to_encode = data.copy()
-        expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+        if expires_delta:
+            expire = datetime.now(UTC) + expires_delta
+        else:
+            expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
         return encoded_jwt
@@ -57,7 +60,7 @@ class AuthService:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             return payload
         except JWTError:
-            return None
+            return None 
 
 
 class TranscriptionService:
@@ -96,7 +99,7 @@ class TranscriptionService:
             
             # 更新任务状态为已完成
             task.status = "completed"
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.now(UTC)
             db.commit()
             
         except Exception as e:

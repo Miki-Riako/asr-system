@@ -31,9 +31,8 @@ def test_login_success(test_user):
     resp = client.post("/auth/login", json=test_user)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["username"] == test_user["username"]
-    assert "user_id" in data
-    assert "created_at" in data
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
 
 def test_login_wrong_password(test_user):
     resp = client.post("/auth/login", json={"username": test_user["username"], "password": "wrongpass"})
