@@ -142,6 +142,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.development
+.env.production
 .envrc
 .venv
 env/
@@ -149,6 +152,18 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# 敏感配置文件
+*/config/local.py
+*/config/production.py
+*/.env
+*/.env.local
+
+# 上传文件和临时文件
+uploads/
+temp/
+*/uploads/
+*/temp/
 
 # Spyder project settings
 .spyderproject

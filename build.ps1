@@ -43,6 +43,14 @@ Pop-Location
 # Install frontend dependencies
 Write-Host ">>> Installing frontend dependencies..." -ForegroundColor $Green
 Push-Location .\asr_system_frontend
+
+# Copy environment file if it doesn't exist
+if (-not (Test-Path ".env")) {
+    Write-Host ">>> Creating frontend environment configuration..." -ForegroundColor $Green
+    Copy-Item "env.example" ".env"
+    Write-Host "⚠️  Please edit asr_system_frontend\.env file to set your configuration parameters" -ForegroundColor $Yellow
+}
+
 npm install
 if (-not $?) {
     Write-Host "Failed to install frontend dependencies! You may need to install Node.js first." -ForegroundColor $Red
@@ -54,13 +62,23 @@ Pop-Location
 # Run database migrations
 Write-Host ">>> Initializing database..." -ForegroundColor $Green
 Push-Location .\asr_system_backend
-python -c "from app.database import Base, engine; Base.metadata.create_all(bind=engine)"
+
+# Copy environment file if it doesn't exist
+if (-not (Test-Path ".env")) {
+    Write-Host ">>> Creating backend environment configuration..." -ForegroundColor $Green
+    Copy-Item "env.example" ".env"
+    Write-Host "⚠️  Please edit asr_system_backend\.env file to set your configuration parameters" -ForegroundColor $Yellow
+}
+
+# Use our initialization script
+python init_db.py
 if (-not $?) {
     Write-Host "Database initialization failed!" -ForegroundColor $Red
     Pop-Location
     exit 1
 }
 
+# Run Alembic migrations
 $env:PYTHONPATH = "$($env:PYTHONPATH);$(Get-Location)"
 alembic upgrade head
 if (-not $?) {

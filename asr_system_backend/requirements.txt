@@ -5,7 +5,7 @@ pydantic[email]
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt
-alembic
+alembic 
 python-multipart
 pytest
 faiss-cpu
@@ -16,4 +16,5 @@ openai-whisper
 torch
 torchaudio
 librosa
-soundfile 
+soundfile
+python-dotenv 

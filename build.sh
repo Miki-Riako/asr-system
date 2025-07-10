@@ -27,16 +27,32 @@ cd ..
 # 安装前端依赖
 echo -e "${GREEN}>>> 安装前端依赖...${NC}"
 cd asr_system_frontend
+
+# 复制环境变量文件（如果不存在）
+if [ ! -f ".env" ]; then
+    echo -e "${GREEN}>>> 创建前端环境配置文件...${NC}"
+    cp env.example .env
+    echo -e "${YELLOW}⚠️  请编辑 asr_system_frontend/.env 文件，设置您的配置参数${NC}"
+fi
+
 npm install
 cd ..
 
 # 运行数据库迁移
 echo -e "${GREEN}>>> 初始化数据库...${NC}"
 cd asr_system_backend
-python -c "
-from app.database import Base, engine
-Base.metadata.create_all(bind=engine)
-"
+
+# 复制环境变量文件（如果不存在）
+if [ ! -f ".env" ]; then
+    echo -e "${GREEN}>>> 创建后端环境配置文件...${NC}"
+    cp env.example .env
+    echo -e "${YELLOW}⚠️  请编辑 asr_system_backend/.env 文件，设置您的配置参数${NC}"
+fi
+
+# 使用我们的初始化脚本
+python init_db.py
+
+# 运行Alembic迁移
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 alembic upgrade head
 cd ..
