@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import auth, transcription, hotword, realtime
+from .routers import auth, transcription, hotword, realtime, rag
 from .database import engine, Base
 from .config import get_settings
 
@@ -24,4 +24,5 @@ app.add_middleware(
 app.include_router(auth.router) 
 app.include_router(transcription.router)
 app.include_router(hotword.router)
-app.include_router(realtime.router) 
+app.include_router(realtime.router)
+app.include_router(rag.router) 
