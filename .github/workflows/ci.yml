@@ -28,9 +28,7 @@ jobs:
           cd asr_system_backend
           alembic upgrade head
       - name: Run tests
-        run: |
-          cd asr_system_backend
-          pytest
+        run: pytest
 
   frontend:
     runs-on: ubuntu-latest

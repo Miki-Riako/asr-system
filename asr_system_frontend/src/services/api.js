@@ -76,8 +76,16 @@ export const transcriptionAPI = {
   },
   
   getUserTasks: async (skip = 0, limit = 10) => {
-    const response = await axios.get(`/asr/tasks?skip=${skip}&limit=${limit}`);
-    return response.data;
+    try {
+      const response = await axios.get(`/asr/tasks?skip=${skip}&limit=${limit}`);
+      return response.data;
+    } catch (error) {
+      // 如果没有找到任务端点，返回空数组（用于向后兼容）
+      if (error.response?.status === 404) {
+        return [];
+      }
+      throw error;
+    }
   }
 };
 
@@ -114,5 +122,31 @@ export const hotwordAPI = {
     });
     
     return response.data;
+  }
+};
+
+// Realtime API (WebSocket 相关工具函数)
+export const realtimeAPI = {
+  getWebSocketUrl: () => {
+    const token = localStorage.getItem('token');
+    const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000';
+    return `${wsBaseUrl}/ws/asr/transcribe/realtime?token=${token}`;
+  },
+  
+  // 心跳检测
+  sendHeartbeat: (websocket) => {
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify({
+        type: 'ping',
+        timestamp: Date.now()
+      }));
+    }
+  },
+  
+  // 发送命令
+  sendCommand: (websocket, command) => {
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify(command));
+    }
   }
 }; 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from .. import schemas, services, models
@@ -77,6 +77,22 @@ async def transcribe_file(
     
     return schemas.TranscriptionTaskOut.model_validate(db_task)
 
+@router.get("/tasks", response_model=List[schemas.TranscriptionTaskOut])
+def get_user_tasks(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取用户的转写任务列表
+    """
+    tasks = db.query(models.TranscriptionTask).filter(
+        models.TranscriptionTask.user_id == current_user.id
+    ).order_by(models.TranscriptionTask.created_at.desc()).offset(skip).limit(limit).all()
+    
+    return [schemas.TranscriptionTaskOut.model_validate(task) for task in tasks]
+
 @router.get("/tasks/{task_id}", response_model=schemas.TranscriptionTaskWithSegments)
 def get_task_result(
     task_id: str,
@@ -114,20 +130,4 @@ def get_task_result(
     result = schemas.TranscriptionTaskWithSegments.model_validate(task)
     result.segments = [schemas.TranscriptionSegmentOut.model_validate(segment) for segment in segments]
     
-    return result
-
-@router.get("/tasks", response_model=List[schemas.TranscriptionTaskOut])
-def get_user_tasks(
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 10
-):
-    """
-    获取当前用户的所有转写任务
-    """
-    tasks = db.query(models.TranscriptionTask).filter(
-        models.TranscriptionTask.user_id == current_user.id
-    ).order_by(models.TranscriptionTask.created_at.desc()).offset(skip).limit(limit).all()
-    
-    return tasks 
+    return result 

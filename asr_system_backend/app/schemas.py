@@ -2,20 +2,34 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
-class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=255)
-    password: str = Field(..., min_length=6, max_length=128)
+# 用户相关模型
+class UserBase(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=6)
 
 class UserLogin(BaseModel):
     username: str
     password: str
 
 class UserOut(BaseModel):
-    user_id: str
+    id: str
     username: str
     created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
 
+    class Config:
+        from_attributes = True
+
+# 令牌相关模型
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+# 热词相关模型
 class HotwordBase(BaseModel):
     word: str = Field(..., min_length=1, max_length=255)
     weight: int = Field(5, ge=1, le=10)
@@ -39,33 +53,43 @@ class HotwordUpdate(HotwordBase):
             raise ValueError('权重必须在1-10之间')
         return v
 
-class HotwordOut(HotwordBase):
+class HotwordOut(BaseModel):
     id: str
-    user_id: str
+    word: str
+    weight: int
     created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
+
+    class Config:
+        from_attributes = True
+
+# 转写相关模型
+class TranscriptionTaskBase(BaseModel):
+    filename: str
+
+class TranscriptionTaskCreate(TranscriptionTaskBase):
+    pass
+
+class TranscriptionTaskOut(BaseModel):
+    id: str
+    filename: str
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 class TranscriptionSegmentOut(BaseModel):
+    id: str
     segment_id: int
     start_time: float
     end_time: float
     text: str
     confidence: float
-    model_config = ConfigDict(from_attributes=True)
 
-class TranscriptionTaskCreate(BaseModel):
-    filename: str
-
-class TranscriptionTaskOut(BaseModel):
-    id: str
-    user_id: str
-    filename: str
-    status: str
-    error_message: Optional[str]
-    created_at: datetime
-    completed_at: Optional[datetime]
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 class TranscriptionTaskWithSegments(TranscriptionTaskOut):
-    segments: List[TranscriptionSegmentOut] = []
-    model_config = ConfigDict(from_attributes=True) 
+    segments: List[TranscriptionSegmentOut] = [] 
