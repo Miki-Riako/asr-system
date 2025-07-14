@@ -1,6 +1,7 @@
 .markdown
 asr_system_frontend/node_modules
 asr_system_frontend/package-lock.json
+funasr-runtime-resources
 
 asr_system.db
 
