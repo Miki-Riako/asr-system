@@ -3406,14 +3406,14 @@ File: asr_system_frontend/src/views/RealtimeTranscription.vue
   <div class="min-h-screen bg-gray-900 text-gray-200">
     <header class="bg-gray-800 py-4 shadow-md">
       <div class="container mx-auto px-4 flex justify-between items-center">
-        <h1 class="text-xl font-bold text-blue-400">实时语音转写</h1>
+        <h1 class="text-xl font-bold text-blue-400">录音转写</h1>
         <el-button type="primary" @click="$router.push('/')">返回首页</el-button>
       </div>
     </header>
     
     <main class="container mx-auto py-8 px-4 max-w-6xl">
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- 左侧：控制面板 -->
+        <!-- 左侧：控制面板 (UI保持原样) -->
         <div class="lg:col-span-1">
           <el-card class="bg-gray-800 border-none shadow-lg">
             <template #header>
@@ -3423,178 +3423,71 @@ File: asr_system_frontend/src/views/RealtimeTranscription.vue
               </div>
             </template>
             
-            <div class="space-y-4">
-              <!-- 连接状态 -->
-              <div class="flex items-center justify-between p-3 bg-gray-700 rounded">
-                <span>连接状态:</span>
-                <el-tag :type="getStatusType(connectionStatus)" size="small">
-                  {{ getStatusText(connectionStatus) }}
-                </el-tag>
-              </div>
-              
+            <div class="space-y-4 p-2">
               <!-- 录音控制按钮 -->
               <div class="flex flex-col gap-3">
                 <el-button 
                   :type="isRecording ? 'danger' : 'primary'"
-                  :disabled="connectionStatus !== 'connected'"
+                  :disabled="isLoading"
+                  :loading="isLoading"
                   @click="toggleRecording"
                   size="large"
                   class="w-full"
                 >
                   <el-icon class="mr-2">
-                    <component :is="isRecording ? 'video-pause' : 'video-play'" />
+                    <component :is="isRecording ? 'VideoPause' : 'VideoPlay'" />
                   </el-icon>
-                  {{ isRecording ? '停止录音' : '开始录音' }}
-                </el-button>
-                
-                <el-button 
-                  v-if="connectionStatus === 'disconnected'"
-                  type="success"
-                  @click="connectWebSocket"
-                  :loading="connecting"
-                  size="large"
-                  class="w-full"
-                >
-                  连接服务器
-                </el-button>
-                
-                <el-button 
-                  v-if="connectionStatus === 'connected'"
-                  type="warning"
-                  @click="disconnectWebSocket"
-                  size="large"
-                  class="w-full"
-                >
-                  断开连接
+                  {{ buttonText }}
                 </el-button>
               </div>
-              
-              <!-- 音频设置 -->
-              <div class="space-y-3">
-                <div class="flex items-center justify-between">
-                  <span>启用热词增强:</span>
-                  <el-switch v-model="useHotwords" />
+
+              <!-- 状态和时长显示 -->
+              <div class="bg-gray-700 p-3 rounded text-center">
+                <div class="text-sm text-gray-400">当前状态</div>
+                <div class="text-lg font-semibold mt-1" :class="statusClass">
+                  {{ statusText }}
                 </div>
-                
-                <div class="flex items-center justify-between">
-                  <span>音量:</span>
-                  <div class="flex items-center gap-2">
-                    <el-slider 
-                      v-model="audioVolume" 
-                      :min="0" 
-                      :max="100" 
-                      :step="5"
-                      style="width: 120px"
-                    />
-                    <span class="text-sm">{{ audioVolume }}%</span>
-                  </div>
+                <div v-if="isRecording" class="text-sm text-gray-400 mt-2">
+                  录音时长: <span class="font-mono">{{ formatTime(recordingDuration) }}</span>
                 </div>
               </div>
-              
-              <!-- 音频可视化 -->
-              <div class="bg-gray-700 p-3 rounded">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-sm">音频输入</span>
-                  <span class="text-sm">{{ Math.round(audioLevel) }}%</span>
-                </div>
-                <div class="w-full bg-gray-600 rounded-full h-2">
-                  <div 
-                    class="bg-blue-500 h-2 rounded-full transition-all duration-100"
-                    :style="{ width: audioLevel + '%' }"
-                  ></div>
-                </div>
-              </div>
-              
-              <!-- 统计信息 -->
-              <div class="text-sm text-gray-400 space-y-1">
-                <div>录音时长: {{ formatTime(recordingDuration) }}</div>
-                <div>转写片段: {{ transcriptionResults.length }}</div>
-                <div>热词检测: {{ totalHotwordsDetected }}</div>
-              </div>
+
             </div>
           </el-card>
         </div>
         
-        <!-- 右侧：转写结果 -->
+        <!-- 右侧：转写结果 (UI保持原样) -->
         <div class="lg:col-span-2">
           <el-card class="bg-gray-800 border-none shadow-lg">
             <template #header>
               <div class="flex items-center justify-between">
                 <div class="flex items-center">
                   <el-icon class="mr-2"><document /></el-icon>
-                  <span>实时转写结果</span>
+                  <span>转写结果</span>
                 </div>
                 <div class="flex gap-2">
-                  <el-button size="small" @click="clearResults">清空结果</el-button>
-                  <el-button size="small" @click="exportResults">导出文本</el-button>
+                  <el-button size="small" @click="clearResult" :disabled="isLoading">清空结果</el-button>
+                  <el-button size="small" @click="exportResult" :disabled="!transcriptionResult || isLoading">导出文本</el-button>
                 </div>
               </div>
             </template>
             
-            <div class="space-y-4">
-              <!-- 实时转写区域 -->
-              <div 
-                ref="transcriptionContainer"
-                class="bg-gray-700 p-4 rounded min-h-[400px] max-h-[500px] overflow-y-auto"
-              >
-                <div v-if="transcriptionResults.length === 0" class="text-center text-gray-400 py-8">
-                  <el-icon class="text-4xl mb-2"><microphone /></el-icon>
-                  <p>点击开始录音，实时转写结果将显示在这里</p>
-                </div>
-                
-                <div v-else class="space-y-3">
-                  <div 
-                    v-for="(result, index) in transcriptionResults"
-                    :key="index"
-                    class="border-l-4 border-blue-500 pl-4 py-2"
-                  >
-                    <div class="flex items-center justify-between mb-1">
-                      <span class="text-xs text-gray-400">{{ formatTime(result.timestamp) }}</span>
-                      <div class="flex items-center gap-2">
-                        <el-tag 
-                          v-if="result.confidence_boost > 1"
-                          type="success"
-                          size="small"
-                        >
-                          热词增强 {{ result.confidence_boost.toFixed(1) }}x
-                        </el-tag>
-                        <span class="text-xs text-gray-400">
-                          置信度: {{ (result.confidence * 100).toFixed(1) }}%
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <p class="text-white leading-relaxed">{{ result.text }}</p>
-                    
-                    <!-- 检测到的热词 -->
-                    <div v-if="result.hotwords_detected.length > 0" class="mt-2">
-                      <div class="flex items-center gap-2 flex-wrap">
-                        <span class="text-xs text-gray-400">检测到热词:</span>
-                        <el-tag 
-                          v-for="hotword in result.hotwords_detected"
-                          :key="hotword.word"
-                          type="warning"
-                          size="small"
-                        >
-                          {{ hotword.word }} ({{ hotword.weight }})
-                        </el-tag>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            <div 
+              class="bg-gray-700 p-4 rounded min-h-[400px] max-h-[500px] overflow-y-auto"
+            >
+              <!-- 加载状态 -->
+              <div v-if="isLoading" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
+                <el-icon class="is-loading text-4xl mb-4 text-blue-400"><loading /></el-icon>
+                <p>正在努力转写中，请稍候...</p>
               </div>
-              
-              <!-- 连接日志 -->
-              <div class="bg-gray-700 p-3 rounded">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-sm font-semibold">连接日志</span>
-                  <el-button size="small" @click="clearLogs">清空日志</el-button>
-                </div>
-                <div class="text-xs text-gray-400 max-h-24 overflow-y-auto">
-                  <div v-for="(log, index) in connectionLogs" :key="index" class="mb-1">
-                    [{{ formatTime(log.timestamp) }}] {{ log.message }}
-                  </div>
-                </div>
+              <!-- 空状态 -->
+              <div v-else-if="!transcriptionResult" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
+                <el-icon class="text-5xl mb-2"><files /></el-icon>
+                <p>点击“开始录音”，结束后结果将显示在这里</p>
+              </div>
+              <!-- 显示结果 -->
+              <div v-else class="text-white text-lg leading-relaxed whitespace-pre-wrap">
+                {{ transcriptionResult }}
               </div>
             </div>
           </el-card>
@@ -3605,466 +3498,166 @@ File: asr_system_frontend/src/views/RealtimeTranscription.vue
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Microphone, Document, VideoPlay, VideoPause } from '@element-plus/icons-vue';
+import { ref, computed, onUnmounted } from 'vue';
+import { ElMessage } from 'element-plus';
+import { Microphone, Document, VideoPlay, VideoPause, Loading, Files } from '@element-plus/icons-vue';
 
-const router = useRouter();
-
-// 状态管理
-const connectionStatus = ref('disconnected'); // disconnected, connecting, connected, error
-const connecting = ref(false);
+// --- 状态管理 ---
 const isRecording = ref(false);
-const useHotwords = ref(true);
-const audioVolume = ref(80);
-const audioLevel = ref(0);
+const isLoading = ref(false);
+const mediaRecorder = ref(null);
+const audioChunks = ref([]);
+const transcriptionResult = ref('');
 const recordingDuration = ref(0);
-const totalHotwordsDetected = ref(0);
-
-// 转写结果
-const transcriptionResults = ref([]);
-const connectionLogs = ref([]);
-
-// WebSocket相关
-let websocket = null;
-let mediaRecorder = null;
-let audioContext = null;
-let analyser = null;
-let audioStream = null;
 let recordingTimer = null;
-let audioLevelTimer = null;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_DELAY = 2000;
 
-// 引用
-const transcriptionContainer = ref(null);
-
-// 页面加载时检查浏览器支持
-onMounted(() => {
-  checkBrowserSupport();
+// --- UI 计算属性 ---
+const buttonText = computed(() => {
+  if (isLoading.value) return '正在转写...';
+  return isRecording.value ? '停止录音' : '开始录音';
 });
 
-// 页面卸载时清理资源
+const statusText = computed(() => {
+  if (isLoading.value) return '正在处理';
+  if (isRecording.value) return '正在录音';
+  return '空闲';
+});
+
+const statusClass = computed(() => {
+  if (isLoading.value) return 'text-blue-400';
+  if (isRecording.value) return 'text-red-400';
+  return 'text-green-400';
+});
+
+// --- 生命周期钩子 ---
 onUnmounted(() => {
-  cleanup();
+  if (mediaRecorder.value && mediaRecorder.value.state !== 'inactive') {
+    mediaRecorder.value.stop();
+  }
+  if (recordingTimer) {
+    clearInterval(recordingTimer);
+  }
 });
 
-// 检查浏览器支持
-function checkBrowserSupport() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    ElMessage.error('您的浏览器不支持音频录制功能');
-    return false;
-  }
-  
-  if (!window.WebSocket) {
-    ElMessage.error('您的浏览器不支持WebSocket');
-    return false;
-  }
-  
-  return true;
-}
+// --- 核心功能函数 (与上一版相同，但现在会驱动这个UI) ---
 
-// 连接WebSocket
-async function connectWebSocket() {
-  if (!checkBrowserSupport()) return;
-  
-  try {
-    connecting.value = true;
-    connectionStatus.value = 'connecting';
-    
-    // 获取用户媒体权限
-    audioStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 16000
-      }
-    });
-    
-    // 创建音频上下文
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    
-    // 创建音频分析器
-    analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(audioStream);
-    source.connect(analyser);
-    
-    // 开始音频级别监控
-    startAudioLevelMonitoring();
-    
-    // 建立WebSocket连接
-    const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('未找到认证令牌，请重新登录');
-    }
-    
-    // 构建WebSocket URL
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//localhost:8080/ws/asr/transcribe/realtime?token=${token}`;
-    
-    if (websocket) {
-      websocket.close();
-      websocket = null;
-    }
-    
-    websocket = new WebSocket(wsUrl);
-    
-    websocket.onopen = () => {
-      connectionStatus.value = 'connected';
-      connecting.value = false;
-      reconnectAttempts = 0;
-      addLog('WebSocket连接已建立');
-      ElMessage.success('连接成功！');
-    };
-    
-    websocket.onmessage = (event) => {
-      handleWebSocketMessage(JSON.parse(event.data));
-    };
-    
-    websocket.onclose = (event) => {
-      connectionStatus.value = 'disconnected';
-      connecting.value = false;
-      addLog(`WebSocket连接已关闭 (代码: ${event.code})`);
-      
-      if (isRecording.value) {
-        stopRecording();
-      }
-      
-      // 尝试重连
-      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && event.code !== 1000) {
-        reconnectAttempts++;
-        addLog(`尝试重新连接 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-        setTimeout(connectWebSocket, RECONNECT_DELAY);
-      }
-    };
-    
-    websocket.onerror = (error) => {
-      connectionStatus.value = 'error';
-      connecting.value = false;
-      addLog(`WebSocket错误: ${error.message || '未知错误'}`);
-      ElMessage.error('连接失败，请检查网络或重试');
-    };
-    
-  } catch (error) {
-    connecting.value = false;
-    connectionStatus.value = 'error';
-    addLog(`连接失败: ${error.message}`);
-    ElMessage.error(`连接失败: ${error.message}`);
-    cleanup();
-  }
-}
-
-// 断开WebSocket连接
-function disconnectWebSocket() {
-  if (isRecording.value) {
-    stopRecording();
-  }
-  
-  if (websocket) {
-    websocket.close();
-    websocket = null;
-  }
-  
-  cleanup();
-  addLog('手动断开连接');
-}
-
-// 处理WebSocket消息
-function handleWebSocketMessage(message) {
-  switch (message.type) {
-    case 'connection_established':
-      addLog(`连接已建立，用户ID: ${message.user_id}`);
-      break;
-      
-    case 'ready':
-      addLog('实时转写服务已准备就绪');
-      break;
-      
-    case 'transcription_result':
-      handleTranscriptionResult(message.data);
-      break;
-      
-    case 'silence_detected':
-      addLog('检测到静音');
-      break;
-      
-    case 'error':
-      addLog(`错误: ${message.message}`);
-      ElMessage.error(message.message);
-      break;
-      
-    case 'pong':
-      addLog('收到服务器心跳响应');
-      break;
-      
-    default:
-      addLog(`收到未知消息类型: ${message.type}`);
-  }
-}
-
-// 处理转写结果
-function handleTranscriptionResult(data) {
-  const result = {
-    text: data.text,
-    confidence: data.segments?.[0]?.confidence || 0.8,
-    confidence_boost: data.confidence_boost || 1,
-    hotwords_detected: data.hotwords_detected || [],
-    timestamp: Date.now()
-  };
-  
-  transcriptionResults.value.push(result);
-  totalHotwordsDetected.value += result.hotwords_detected.length;
-  
-  // 自动滚动到最新结果
-  nextTick(() => {
-    if (transcriptionContainer.value) {
-      transcriptionContainer.value.scrollTop = transcriptionContainer.value.scrollHeight;
-    }
-  });
-  
-  addLog(`转写结果: ${data.text.substring(0, 50)}${data.text.length > 50 ? '...' : ''}`);
-}
-
-// 开始/停止录音
-function toggleRecording() {
-  if (isRecording.value) {
-    stopRecording();
-  } else {
+const toggleRecording = () => {
+  if (!isRecording.value) {
     startRecording();
+  } else {
+    stopRecording();
   }
-}
+};
 
-// 开始录音
-function startRecording() {
-  if (!audioStream) {
-    ElMessage.error('音频流未就绪');
+const startRecording = async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    ElMessage.error('您的浏览器不支持录音功能。');
     return;
   }
-  
   try {
-    // 创建MediaRecorder
-    mediaRecorder = new MediaRecorder(audioStream, {
-      mimeType: 'audio/webm;codecs=opus',
-      bitsPerSecond: 16000
-    });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(event.data);
+    audioChunks.value = [];
+    transcriptionResult.value = '';
+    
+    mediaRecorder.value = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+    mediaRecorder.value.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.value.push(event.data);
       }
     };
-    
-    // 每1秒发送一次数据
-    mediaRecorder.start(1000);
+
+    mediaRecorder.value.onstop = () => {
+      transcribeAudio();
+      stream.getTracks().forEach(track => track.stop());
+    };
+
+    mediaRecorder.value.start();
     isRecording.value = true;
-    
-    // 启动录音计时器
+
     recordingDuration.value = 0;
     recordingTimer = setInterval(() => {
-      recordingDuration.value += 1;
+      recordingDuration.value++;
     }, 1000);
-    
-    addLog('开始录音');
-    
+
   } catch (error) {
-    ElMessage.error(`录音失败: ${error.message}`);
-    addLog(`录音失败: ${error.message}`);
+    console.error('无法开始录音:', error);
+    ElMessage.error('无法启动录音功能，请检查麦克风权限。');
   }
-}
+};
 
-// 停止录音
-function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    addLog('停止录音');
-  }
-  
-  if (recordingTimer) {
+const stopRecording = () => {
+  if (mediaRecorder.value && mediaRecorder.value.state === 'recording') {
+    mediaRecorder.value.stop();
+    isRecording.value = false;
     clearInterval(recordingTimer);
-    recordingTimer = null;
   }
-  
-  isRecording.value = false;
-}
+};
 
-// 开始音频级别监控
-function startAudioLevelMonitoring() {
-  if (!analyser) return;
-  
-  const dataArray = new Uint8Array(analyser.frequencyBinCount);
-  
-  const updateLevel = () => {
-    if (analyser) {
-      analyser.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
-      audioLevel.value = (average / 255) * 100;
-    }
-  };
-  
-  audioLevelTimer = setInterval(updateLevel, 100);
-}
-
-// 清理资源
-function cleanup() {
-  if (audioStream) {
-    audioStream.getTracks().forEach(track => track.stop());
-    audioStream = null;
-  }
-  
-  if (audioContext) {
-    audioContext.close();
-    audioContext = null;
-  }
-  
-  if (analyser) {
-    analyser = null;
-  }
-  
-  if (audioLevelTimer) {
-    clearInterval(audioLevelTimer);
-    audioLevelTimer = null;
-  }
-  
-  if (recordingTimer) {
-    clearInterval(recordingTimer);
-    recordingTimer = null;
-  }
-  
-  audioLevel.value = 0;
-}
-
-// 添加连接日志
-function addLog(message) {
-  connectionLogs.value.push({
-    message,
-    timestamp: Date.now()
-  });
-  
-  // 限制日志数量
-  if (connectionLogs.value.length > 100) {
-    connectionLogs.value.shift();
-  }
-}
-
-// 清空转写结果
-function clearResults() {
-  transcriptionResults.value = [];
-  totalHotwordsDetected.value = 0;
-}
-
-// 清空日志
-function clearLogs() {
-  connectionLogs.value = [];
-}
-
-// 导出转写结果
-function exportResults() {
-  if (transcriptionResults.value.length === 0) {
-    ElMessage.warning('没有可导出的转写结果');
+const transcribeAudio = async () => {
+  if (audioChunks.value.length === 0) {
+    ElMessage.warning('录音内容过短，未进行转写。');
     return;
   }
-  
-  const text = transcriptionResults.value
-    .map(result => `[${formatTime(result.timestamp)}] ${result.text}`)
-    .join('\n');
-  
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+
+  isLoading.value = true;
+  transcriptionResult.value = '';
+
+  const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
+  const formData = new FormData();
+  formData.append('file', audioBlob, `recording-${Date.now()}.webm`);
+
+  try {
+    const response = await fetch('/api/asr/transcribe/file', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || '转写请求失败');
+    }
+
+    const data = await response.json();
+    transcriptionResult.value = data.result || '未能识别出任何内容。';
+    ElMessage.success('转写完成！');
+
+  } catch (error) {
+    console.error('转写失败:', error);
+    ElMessage.error('转写失败: ' + error.message);
+    transcriptionResult.value = `错误: ${error.message}`;
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+// --- 辅助UI函数 ---
+
+const formatTime = (seconds) => {
+  const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  return `${m}:${s}`;
+};
+
+const clearResult = () => {
+  transcriptionResult.value = '';
+};
+
+const exportResult = () => {
+  if (!transcriptionResult.value) {
+    ElMessage.warning('没有可导出的结果');
+    return;
+  }
+  const blob = new Blob([transcriptionResult.value], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `实时转写结果_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+  a.download = `录音转写结果.txt`;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-// 获取状态类型
-function getStatusType(status) {
-  const statusMap = {
-    'disconnected': 'info',
-    'connecting': 'warning',
-    'connected': 'success',
-    'error': 'danger'
-  };
-  return statusMap[status] || 'info';
-}
-
-// 获取状态文本
-function getStatusText(status) {
-  const statusMap = {
-    'disconnected': '未连接',
-    'connecting': '连接中',
-    'connected': '已连接',
-    'error': '连接错误'
-  };
-  return statusMap[status] || status;
-}
-
-// 格式化时间
-function formatTime(timestamp) {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString('zh-CN');
-}
-
-// 添加WAV转换函数
-function audioBufferToWav(buffer) {
-  const numChannels = 1;
-  const sampleRate = buffer.sampleRate;
-  const format = 1; // PCM
-  const bitDepth = 16;
-  
-  const bytesPerSample = bitDepth / 8;
-  const blockAlign = numChannels * bytesPerSample;
-  
-  const wavBuffer = buffer.getChannelData(0);
-  const wavDataBytes = wavBuffer.length * bytesPerSample;
-  const wavHeaderBytes = 44;
-  const totalBytes = wavHeaderBytes + wavDataBytes;
-  
-  const wavData = new ArrayBuffer(totalBytes);
-  const view = new DataView(wavData);
-  
-  // WAV文件头
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + wavDataBytes, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, format, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitDepth, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, wavDataBytes, true);
-  
-  // 写入音频数据
-  const offset = 44;
-  for (let i = 0; i < wavBuffer.length; i++) {
-    const sample = Math.max(-1, Math.min(1, wavBuffer[i]));
-    view.setInt16(offset + i * bytesPerSample, sample * 0x7FFF, true);
-  }
-  
-  return wavData;
-}
-
-function writeString(view, offset, string) {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i));
-  }
-}
-// 在发送音频数据前添加重采样处理
-const resampleAudio = (audioData, inputRate=48000, outputRate=16000) => {
-  const ratio = inputRate / outputRate;
-  const length = Math.round(audioData.length / ratio);
-  const result = new Float32Array(length);
-  for (let i = 0; i < length; i++) {
-    result[i] = audioData[Math.round(i * ratio)];
-  }
-  return result;
 };
 </script>
 
@@ -4073,40 +3666,9 @@ const resampleAudio = (audioData, inputRate=48000, outputRate=16000) => {
   background-color: #374151;
   border: none;
 }
-
 :deep(.el-card__header) {
   background-color: rgba(17, 24, 39, 0.4);
   padding: 12px 16px;
-}
-
-:deep(.el-slider__runway) {
-  background-color: #4b5563;
-}
-
-:deep(.el-slider__bar) {
-  background-color: #3b82f6;
-}
-
-:deep(.el-switch.is-checked .el-switch__core) {
-  background-color: #3b82f6;
-}
-
-.transcription-container {
-  scrollbar-width: thin;
-  scrollbar-color: #4b5563 #374151;
-}
-
-.transcription-container::-webkit-scrollbar {
-  width: 6px;
-}
-
-.transcription-container::-webkit-scrollbar-track {
-  background: #374151;
-}
-
-.transcription-container::-webkit-scrollbar-thumb {
-  background-color: #4b5563;
-  border-radius: 3px;
 }
 </style>
 ```
@@ -9631,6 +9193,80 @@ async def transcribe_file(file: UploadFile = File(...)):
 
 --------------------------------------------------------------------------------
 
+File: asr_system_backend/app/routers/chat.py
+```python
+# 文件: asr_system_backend/app/routers/chat.py
+
+import logging
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+import dashscope
+from ..config import get_settings
+
+# 配置日志和路由
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/chat", tags=["Chat"])
+settings = get_settings()
+
+# 定义请求体模型
+class ChatRequest(BaseModel):
+    prompt: str
+
+# 定义一个异步生成器，用于流式传输数据
+async def stream_generator(prompt: str):
+    """
+    调用DeepSeek API并以流式方式返回结果
+    """
+    # 从配置中获取API Key
+    api_key = settings.DASHSCOPE_API_KEY
+    if not api_key:
+        logger.error("DashScope API Key 未配置")
+        # 直接在流中返回错误信息
+        yield "Error: Server's API Key is not configured."
+        return
+
+    dashscope.api_key = api_key
+
+    try:
+        # 调用DeepSeek模型的流式生成接口
+        responses = dashscope.Generation.call(
+            model='deepseek-v2-chat',
+            prompt=prompt,
+            stream=True,
+            incremental_output=True # 增量输出，实现打字机效果
+        )
+
+        for resp in responses:
+            if resp.status_code == 200:
+                content = resp.output.choices[0]['message']['content']
+                yield content # 将每个增量内容块发送给前端
+            else:
+                error_msg = f"Error: code: {resp.status_code}, message: {resp.message}"
+                logger.error(error_msg)
+                yield error_msg
+                break
+    except Exception as e:
+        logger.error(f"调用DashScope API时出错: {e}")
+        yield f"Error: An exception occurred while calling the AI service."
+
+# 定义流式API端点
+@router.post("/stream")
+async def stream_chat(request: ChatRequest):
+    """
+    接收前端的Prompt，并以流式方式返回DeepSeek模型的响应
+    """
+    if not request.prompt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt不能为空"
+        )
+    
+    return StreamingResponse(stream_generator(request.prompt), media_type="text/event-stream")
+```
+
+--------------------------------------------------------------------------------
+
 File: asr_system_backend/app/routers/hotword.py
 ```python
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -12218,14 +11854,14 @@ e076f06e191466160a18c4129749553ce100258b refs/remotes/origin/main
 
 File: .git/ORIG_HEAD
 ```text
-e106eb2cd515bc83e8e1123ff617a54b481a7b0b
+6481a932458e144c6fc11d7cd8c3e1deae2083e9
 ```
 
 --------------------------------------------------------------------------------
 
 File: .git/COMMIT_EDITMSG
 ```text
-update
+commit
 ```
 
 --------------------------------------------------------------------------------
@@ -12239,7 +11875,7 @@ Unnamed repository; edit this file 'description' to name the repository.
 
 File: .git/FETCH_HEAD
 ```text
-e106eb2cd515bc83e8e1123ff617a54b481a7b0b		branch 'main' of github.com:Miki-Riako/asr-system
+6724e78d9de92025ea2292ac1af3abb3293c8fd7		branch 'main' of github.com:Miki-Riako/asr-system
 ```
 
 --------------------------------------------------------------------------------
@@ -12272,6 +11908,9 @@ c754c505ee78fb4535c05269acd33ebc2fbf8661 09894afad25a2ddf6a20c338d7a766b2fa842fe
 09894afad25a2ddf6a20c338d7a766b2fa842fec a3c308bb7e5d81b3eb68858d3b0a8d14e5178e1d ght <ght0719@qq.com> 1752760723 +0800	commit: 网页报错改好
 a3c308bb7e5d81b3eb68858d3b0a8d14e5178e1d e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752760891 +0800	commit: update
 e106eb2cd515bc83e8e1123ff617a54b481a7b0b e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752768200 +0800	reset: moving to origin/main
+e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771217 +0800	commit: commit
+6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771732 +0800	commit: commit
+6481a932458e144c6fc11d7cd8c3e1deae2083e9 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752773646 +0800	reset: moving to origin/main
 ```
 
 --------------------------------------------------------------------------------
@@ -12295,6 +11934,8 @@ da063928fee9b5544dfa01ba1647a072f04f7115 3eb26444660cd32b7ada80e490c927676e0725f
 c754c505ee78fb4535c05269acd33ebc2fbf8661 09894afad25a2ddf6a20c338d7a766b2fa842fec ght <ght0719@qq.com> 1752752300 +0800	pull: Fast-forward
 09894afad25a2ddf6a20c338d7a766b2fa842fec a3c308bb7e5d81b3eb68858d3b0a8d14e5178e1d ght <ght0719@qq.com> 1752760723 +0800	commit: 网页报错改好
 a3c308bb7e5d81b3eb68858d3b0a8d14e5178e1d e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752760891 +0800	commit: update
+e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771217 +0800	commit: commit
+6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771732 +0800	commit: commit
 ```
 
 --------------------------------------------------------------------------------
@@ -12307,6 +11948,8 @@ e076f06e191466160a18c4129749553ce100258b 7b03493583299eb0c1c69523a15e58c293be855
 2a0f6dae50abdc215cbaecb360b28950d316672c c754c505ee78fb4535c05269acd33ebc2fbf8661 ght <ght0719@qq.com> 1752722056 +0800	update by push
 c754c505ee78fb4535c05269acd33ebc2fbf8661 09894afad25a2ddf6a20c338d7a766b2fa842fec ght <ght0719@qq.com> 1752752300 +0800	pull: fast-forward
 09894afad25a2ddf6a20c338d7a766b2fa842fec e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752760916 +0800	update by push
+e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771352 +0800	update by push
+6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771751 +0800	update by push
 ```
 
 --------------------------------------------------------------------------------
@@ -13200,14 +12843,14 @@ File: .git/info/exclude
 
 File: .git/refs/heads/main
 ```text
-e106eb2cd515bc83e8e1123ff617a54b481a7b0b
+6481a932458e144c6fc11d7cd8c3e1deae2083e9
 ```
 
 --------------------------------------------------------------------------------
 
 File: .git/refs/remotes/origin/main
 ```text
-e106eb2cd515bc83e8e1123ff617a54b481a7b0b
+6481a932458e144c6fc11d7cd8c3e1deae2083e9
 ```
 
 --------------------------------------------------------------------------------
