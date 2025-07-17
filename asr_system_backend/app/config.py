@@ -7,7 +7,24 @@ load_dotenv()
 
 class Settings:
     """应用配置设置"""
+     # 阿里云DashScope配置 (DeepSeek)
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+     # DeepSeek聊天模型配置
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "deepseek-v2-chat")
+    CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "4000"))
+    CHAT_TEMPERATURE: float = float(os.getenv("CHAT_TEMPERATURE", "0.7"))
+    CHAT_TOP_P: float = float(os.getenv("CHAT_TOP_P", "0.8"))
     
+    @property
+    def chat_config(self) -> dict:
+        """获取聊天服务配置"""
+        return {
+            "model": self.CHAT_MODEL,
+            "max_tokens": self.CHAT_MAX_TOKENS,
+            "temperature": self.CHAT_TEMPERATURE,
+            "top_p": self.CHAT_TOP_P,
+            "provider": "DeepSeek via DashScope"
+        }
     # 数据库配置
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./asr_system.db")
     

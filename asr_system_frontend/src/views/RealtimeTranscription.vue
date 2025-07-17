@@ -105,8 +105,9 @@
 import { ref, computed, onUnmounted, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Microphone, VideoPause, Promotion, MagicStick } from '@element-plus/icons-vue';
+import axios from 'axios';
 
-// --- 状态管理 ---
+// --- 状态管理 (无变化) ---
 const isRecording = ref(false);
 const isLoading = ref(false);
 const mediaRecorder = ref(null);
@@ -126,10 +127,10 @@ const progressColors = [
   { color: '#f56c6c', percentage: 100 },
 ];
 
-// --- UI 计算属性 ---
+// --- UI 计算属性 (无变化) ---
 const statusText = computed(() => {
   if (isRecording.value) return '正在录音...';
-  if (isLoading.value) return '处理中...';
+  if (isLoading.value) return 'AI思考中...';
   return '空闲';
 });
 const statusClass = computed(() => {
@@ -138,7 +139,7 @@ const statusClass = computed(() => {
   return 'text-green-400';
 });
 
-// --- 生命周期 ---
+// --- 生命周期 (无变化) ---
 onUnmounted(() => {
   stopAudioProcessing();
 });
@@ -175,7 +176,7 @@ const stopRecording = () => {
   }
 };
 
-// 【功能1：音频转写 - 恢复到您之前能正常工作的版本】
+// 【功能1：音频转写 - 已是正确版本，无需修改】
 const transcribeAudio = async () => {
   if (audioChunks.value.length === 0) return;
   isLoading.value = true;
@@ -185,48 +186,99 @@ const transcribeAudio = async () => {
   formData.append('file', audioBlob, `recording.webm`);
 
   try {
-    const response = await fetch('/api/asr/transcribe/file', {
-      method: 'POST',
-      body: formData,
+    const response = await axios.post('/api/asr/transcribe/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || '音频转写服务失败');
-    }
-    const data = await response.json();
-    promptText.value = data.result || ''; // 将真实的转写结果放入输入框
-    if (data.result) ElMessage.success('语音识别成功！');
+    promptText.value = response.data.result || '';
+    if (response.data.result) ElMessage.success('语音识别成功！');
     else ElMessage.warning('未能识别出任何内容。');
   } catch (error) {
-    ElMessage.error(error.message);
+    const detail = error.response?.data?.detail || '音频转写服务失败';
+    ElMessage.error(detail);
   } finally {
     isLoading.value = false;
   }
 };
 
-// 【功能2：发送Prompt给AI - 暂时保持模拟状态】
+// =======================================================
+// 【功能2：发送Prompt给AI - 替换为真实API调用】
+// =======================================================
 const sendPrompt = async () => {
     if (!promptText.value.trim() || isLoading.value) return;
 
+    isLoading.value = true;
     const currentPrompt = promptText.value;
     chatHistory.value.push({ role: 'user', content: currentPrompt });
-    
-    // 模拟AI思考
-    isLoading.value = true;
-    chatHistory.value.push({ role: 'assistant', content: '...' });
+    promptText.value = '';
+
     await nextTick();
     scrollToBottom();
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const assistantMessageIndex = chatHistory.value.length;
+    chatHistory.value.push({ role: 'assistant', content: '' });
 
-    const assistantMessageIndex = chatHistory.value.length - 1;
-    chatHistory.value[assistantMessageIndex].content = `已收到您的消息：“${currentPrompt}”。\n下一步我们将连接真正的AI模型。`;
-    isLoading.value = false;
+    try {
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            },
+            body: JSON.stringify({ 
+                prompt: currentPrompt,
+                temperature: 0.7,
+                max_tokens: 4000
+            }),
+        });
 
-    promptText.value = '';
+        if (!response.ok) {
+            throw new Error(`DeepSeek服务错误: ${response.status} ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.content) {
+                            chatHistory.value[assistantMessageIndex].content += data.content;
+                        } else if (data.error) {
+                            chatHistory.value[assistantMessageIndex].content = `DeepSeek错误: ${data.error}`;
+                            break;
+                        } else if (data.done) {
+                            // 添加模型信息到消息
+                            if (data.model) {
+                                console.log(`回复由 ${data.model} 生成`);
+                            }
+                            break;
+                        }
+                    } catch (e) {
+                        // 忽略JSON解析错误
+                    }
+                }
+            }
+            
+            scrollToBottom();
+        }
+
+    } catch (error) {
+        chatHistory.value[assistantMessageIndex].content = `抱歉，与DeepSeek模型通信时出错: ${error.message}`;
+        ElMessage.error(error.message);
+    } finally {
+        isLoading.value = false;
+    }
 };
 
-// --- 音量可视化函数 ---
+// --- 音量可视化函数 (无变化) ---
 const startAudioProcessing = (stream) => {
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const analyserNode = audioContext.createAnalyser();
@@ -253,7 +305,7 @@ const stopAudioProcessing = (stream = null) => {
     audioLevel.value = 0;
 };
 
-// --- 辅助函数 ---
+// --- 辅助函数 (无变化) ---
 const formatTime = (seconds) => {
   const m = String(Math.floor(seconds / 60)).padStart(2, '0');
   const s = String(seconds % 60).padStart(2, '0');
