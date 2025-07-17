@@ -222,7 +222,7 @@ const totalHotwordsDetected = ref(0);
 const transcriptionResults = ref([]);
 const connectionLogs = ref([]);
 
-// WebSocket 相关
+// WebSocket相关
 let websocket = null;
 let mediaRecorder = null;
 let audioContext = null;
@@ -230,6 +230,9 @@ let analyser = null;
 let audioStream = null;
 let recordingTimer = null;
 let audioLevelTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAY = 2000;
 
 // 引用
 const transcriptionContainer = ref(null);
@@ -294,12 +297,21 @@ async function connectWebSocket() {
       throw new Error('未找到认证令牌，请重新登录');
     }
     
-    const wsUrl = `ws://localhost:8000/ws/asr/transcribe/realtime?token=${token}`;
+    // 构建WebSocket URL
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//localhost:8080/ws/asr/transcribe/realtime?token=${token}`;
+    
+    if (websocket) {
+      websocket.close();
+      websocket = null;
+    }
+    
     websocket = new WebSocket(wsUrl);
     
     websocket.onopen = () => {
       connectionStatus.value = 'connected';
       connecting.value = false;
+      reconnectAttempts = 0;
       addLog('WebSocket连接已建立');
       ElMessage.success('连接成功！');
     };
@@ -308,12 +320,20 @@ async function connectWebSocket() {
       handleWebSocketMessage(JSON.parse(event.data));
     };
     
-    websocket.onclose = () => {
+    websocket.onclose = (event) => {
       connectionStatus.value = 'disconnected';
       connecting.value = false;
-      addLog('WebSocket连接已关闭');
+      addLog(`WebSocket连接已关闭 (代码: ${event.code})`);
+      
       if (isRecording.value) {
         stopRecording();
+      }
+      
+      // 尝试重连
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && event.code !== 1000) {
+        reconnectAttempts++;
+        addLog(`尝试重新连接 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+        setTimeout(connectWebSocket, RECONNECT_DELAY);
       }
     };
     
@@ -329,6 +349,7 @@ async function connectWebSocket() {
     connectionStatus.value = 'error';
     addLog(`连接失败: ${error.message}`);
     ElMessage.error(`连接失败: ${error.message}`);
+    cleanup();
   }
 }
 
@@ -422,18 +443,18 @@ function startRecording() {
   try {
     // 创建MediaRecorder
     mediaRecorder = new MediaRecorder(audioStream, {
-      mimeType: 'audio/webm;codecs=opus'
+      mimeType: 'audio/webm;codecs=opus',
+      bitsPerSecond: 16000
     });
     
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
-        // 发送音频数据到WebSocket
         websocket.send(event.data);
       }
     };
     
-    // 开始录制，每500ms发送一次数据
-    mediaRecorder.start(500);
+    // 每1秒发送一次数据
+    mediaRecorder.start(1000);
     isRecording.value = true;
     
     // 启动录音计时器
@@ -454,16 +475,15 @@ function startRecording() {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
+    addLog('停止录音');
   }
-  
-  isRecording.value = false;
   
   if (recordingTimer) {
     clearInterval(recordingTimer);
     recordingTimer = null;
   }
   
-  addLog('停止录音');
+  isRecording.value = false;
 }
 
 // 开始音频级别监控
@@ -485,18 +505,9 @@ function startAudioLevelMonitoring() {
 
 // 清理资源
 function cleanup() {
-  if (recordingTimer) {
-    clearInterval(recordingTimer);
-    recordingTimer = null;
-  }
-  
-  if (audioLevelTimer) {
-    clearInterval(audioLevelTimer);
-    audioLevelTimer = null;
-  }
-  
-  if (mediaRecorder) {
-    mediaRecorder = null;
+  if (audioStream) {
+    audioStream.getTracks().forEach(track => track.stop());
+    audioStream = null;
   }
   
   if (audioContext) {
@@ -504,14 +515,21 @@ function cleanup() {
     audioContext = null;
   }
   
-  if (audioStream) {
-    audioStream.getTracks().forEach(track => track.stop());
-    audioStream = null;
+  if (analyser) {
+    analyser = null;
   }
   
-  analyser = null;
-  connectionStatus.value = 'disconnected';
-  isRecording.value = false;
+  if (audioLevelTimer) {
+    clearInterval(audioLevelTimer);
+    audioLevelTimer = null;
+  }
+  
+  if (recordingTimer) {
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+  }
+  
+  audioLevel.value = 0;
 }
 
 // 添加连接日志
@@ -584,6 +602,55 @@ function getStatusText(status) {
 function formatTime(timestamp) {
   const date = new Date(timestamp);
   return date.toLocaleTimeString('zh-CN');
+}
+
+// 添加WAV转换函数
+function audioBufferToWav(buffer) {
+  const numChannels = 1;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+  
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  
+  const wavBuffer = buffer.getChannelData(0);
+  const wavDataBytes = wavBuffer.length * bytesPerSample;
+  const wavHeaderBytes = 44;
+  const totalBytes = wavHeaderBytes + wavDataBytes;
+  
+  const wavData = new ArrayBuffer(totalBytes);
+  const view = new DataView(wavData);
+  
+  // WAV文件头
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + wavDataBytes, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, wavDataBytes, true);
+  
+  // 写入音频数据
+  const offset = 44;
+  for (let i = 0; i < wavBuffer.length; i++) {
+    const sample = Math.max(-1, Math.min(1, wavBuffer[i]));
+    view.setInt16(offset + i * bytesPerSample, sample * 0x7FFF, true);
+  }
+  
+  return wavData;
+}
+
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
 }
 </script>
 

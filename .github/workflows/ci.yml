@@ -9,44 +9,47 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # 设置此 Job 中所有 run 命令的默认工作目录
+    defaults:
+      run:
+        working-directory: ./asr_system_backend
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          cd asr_system_backend
-          pip install -r requirements.txt
-      - name: Lint
-        run: |
-          cd asr_system_backend
-          flake8 app || true
-      - name: Alembic migrate
-        run: |
-          cd asr_system_backend
-          alembic upgrade head
-      - name: Run tests
-        run: pytest
 
+      - name: Install dependencies and run checks
+        run: |
+          pip install -r requirements.txt
+          # 建议移除 || true，让 lint 失败时构建也失败
+          flake8 app
+          alembic upgrade head
+          pytest
+
+  # frontend job 保持不变，也可以用类似的方法优化
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./asr_system_frontend
     steps:
       - uses: actions/checkout@v3
+      
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-      - name: Install dependencies
+          # 缓存 npm 包，加快后续构建速度
+          cache: 'npm'
+          cache-dependency-path: 'asr_system_frontend/package-lock.json'
+
+      - name: Install, Lint, and Build
         run: |
-          cd asr_system_frontend
           npm install
-      - name: Lint
-        run: |
-          cd asr_system_frontend
-          npm run lint || true
-      - name: Build
-        run: |
-          cd asr_system_frontend
-          npm run build 
+          # 同样建议移除 || true
+          npm run lint
+          npm run build

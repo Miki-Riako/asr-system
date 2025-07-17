@@ -1,8 +1,10 @@
 import axios from 'axios';
 
-// 配置axios基础URL
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-axios.defaults.baseURL = API_BASE_URL;
+// 配置axios基础URL - 使用相对路径，依赖vite的代理配置
+axios.defaults.withCredentials = true;  // 允许跨域请求携带凭证
+
+// WebSocket URL配置 - 使用相对路径
+const WS_BASE_URL = '';  // 空字符串表示使用相对路径
 
 // 请求拦截器：添加认证token
 axios.interceptors.request.use(
@@ -10,6 +12,10 @@ axios.interceptors.request.use(
     const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    // 确保Content-Type正确设置
+    if (config.data instanceof FormData) {
+      config.headers['Content-Type'] = 'multipart/form-data';
     }
     return config;
   },
@@ -37,12 +43,26 @@ axios.interceptors.response.use(
 // Auth API
 export const authAPI = {
   login: async (username, password) => {
-    const response = await axios.post('/auth/login', { username, password });
+    const formData = new FormData();
+    formData.append('username', username);
+    formData.append('password', password);
+    const response = await axios.post('/auth/token', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
     return response.data;
   },
   
   register: async (username, password) => {
-    const response = await axios.post('/auth/register', { username, password });
+    const formData = new FormData();
+    formData.append('username', username);
+    formData.append('password', password);
+    const response = await axios.post('/auth/register', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
     return response.data;
   },
   
@@ -68,24 +88,6 @@ export const transcriptionAPI = {
     });
     
     return response.data;
-  },
-  
-  getTaskResult: async (taskId) => {
-    const response = await axios.get(`/asr/tasks/${taskId}`);
-    return response.data;
-  },
-  
-  getUserTasks: async (skip = 0, limit = 10) => {
-    try {
-      const response = await axios.get(`/asr/tasks?skip=${skip}&limit=${limit}`);
-      return response.data;
-    } catch (error) {
-      // 如果没有找到任务端点，返回空数组（用于向后兼容）
-      if (error.response?.status === 404) {
-        return [];
-      }
-      throw error;
-    }
   }
 };
 
@@ -129,8 +131,7 @@ export const hotwordAPI = {
 export const realtimeAPI = {
   getWebSocketUrl: () => {
     const token = localStorage.getItem('token');
-    const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000';
-    return `${wsBaseUrl}/ws/asr/transcribe/realtime?token=${token}`;
+    return `${WS_BASE_URL}/ws/asr/transcribe/realtime?token=${token}`;
   },
   
   // 心跳检测

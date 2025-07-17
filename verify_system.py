@@ -13,8 +13,8 @@ from pathlib import Path
 
 class SystemVerifier:
     def __init__(self):
-        self.base_url = "http://localhost:8000"
-        self.frontend_url = "http://localhost:5173"
+        self.base_url = "http://localhost:8080"
+        self.frontend_url = "http://localhost:2956"
         self.token = None
         self.test_user = {
             "username": "test_user_" + str(int(time.time())),
@@ -253,8 +253,8 @@ class SystemVerifier:
         if passed == total:
             print("\n🎉 所有测试通过！系统运行正常！")
             print("\n🚀 您现在可以：")
-            print("   - 访问前端界面: http://localhost:5173")
-            print("   - 查看API文档: http://localhost:8000/docs")
+            print("   - 访问前端界面: http://localhost:2956")
+            print("   - 查看API文档: http://localhost:8080/docs")
             print("   - 开始使用语音识别功能")
         else:
             print(f"\n⚠️  有 {total - passed} 项测试失败，请检查相关组件")

@@ -41,3 +41,29 @@ def decode_access_token(token: str) -> dict:
             detail="无效的令牌",
             headers={"WWW-Authenticate": "Bearer"},
         ) 
+
+async def get_current_user_from_token(token: str):
+    """从令牌中获取当前用户"""
+    from .models import User
+    from .database import get_db
+    from sqlalchemy.orm import Session
+    from fastapi import Depends
+
+    payload = decode_access_token(token)
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的认证凭据",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    db = next(get_db())
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user 

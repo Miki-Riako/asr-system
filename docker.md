@@ -1,6 +1,11 @@
 ## 本地部署Docker
 
 通过该方法不用调用API，直接在本地部署。
+```bash
+sudo docker rm -f 055c5f54c1b13cf0f5eea0c23a5a53f650c656cc2a6e159da3620ec1b3de580a
+# 或使用容器名
+sudo docker rm -f funasr_server
+```
 
 ### docker build
 

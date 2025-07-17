@@ -6,8 +6,8 @@ import 'element-plus/dist/index.css';
 import './assets/css/main.css';
 import axios from 'axios';
 
-// 配置axios的全局默认值
-axios.defaults.baseURL = 'http://localhost:8000';
+// 移除硬编码的baseURL配置
+// axios.defaults.baseURL = 'http://localhost:8000';
 axios.defaults.headers.common['Content-Type'] = 'application/json';
 
 // 添加请求拦截器，自动添加token

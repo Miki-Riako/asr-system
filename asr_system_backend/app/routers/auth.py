@@ -1,64 +1,27 @@
-from datetime import datetime, timedelta
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from .. import schemas, models
-from ..database import get_db
-from ..config import get_settings
+from ..models import SessionLocal, User
 from ..auth_service import verify_password, get_password_hash, create_access_token, decode_access_token
+from ..config import get_settings
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
-security = HTTPBearer()
+router = APIRouter(prefix="/auth", tags=["认证"])
 settings = get_settings()
 
-# 密码哈希上下文
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
-def authenticate_user(db: Session, username: str, password: str):
-    """验证用户身份"""
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
-        return False
-    if not verify_password(password, user.hashed_password):
-        return False
-    return user
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
-    """获取当前用户"""
-    token = credentials.credentials
+# 依赖项：获取数据库会话
+def get_db():
+    db = SessionLocal()
     try:
-        payload = decode_access_token(token)
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效的令牌",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的令牌",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户不存在",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return user
+        yield db
+    finally:
+        db.close()
 
-@router.post("/register", response_model=schemas.UserOut)
-def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    """用户注册"""
-    # 检查用户名是否已存在
-    db_user = db.query(models.User).filter(models.User.username == user.username).first()
+@router.post("/register")
+def register(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # 检查用户是否已存在
+    db_user = db.query(User).filter(User.username == form_data.username).first()
     if db_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -66,37 +29,51 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
         )
     
     # 创建新用户
-    hashed_password = get_password_hash(user.password)
-    db_user = models.User(
-        username=user.username,
-        hashed_password=hashed_password
-    )
+    hashed_password = get_password_hash(form_data.password)
+    db_user = User(username=form_data.username, hashed_password=hashed_password)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     
-    return db_user
+    # 生成访问令牌
+    access_token = create_access_token(
+        data={"sub": db_user.username}
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
-@router.post("/login", response_model=schemas.Token)
-def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
-    """用户登录"""
-    db_user = authenticate_user(db, user.username, user.password)
-    if not db_user:
+@router.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # 验证用户
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # 创建访问令牌
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # 生成访问令牌
     access_token = create_access_token(
-        data={"sub": db_user.username}, expires_delta=access_token_expires
+        data={"sub": user.username}
     )
-    
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get("/me", response_model=schemas.UserOut)
-def get_current_user_info(current_user: models.User = Depends(get_current_user)):
-    """获取当前用户信息"""
-    return current_user
+# 获取当前用户
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无效的认证凭证",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = decode_access_token(token)
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except:
+        raise credentials_exception
+    
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        raise credentials_exception
+    return user

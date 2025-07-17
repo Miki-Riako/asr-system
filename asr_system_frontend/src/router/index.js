@@ -4,7 +4,6 @@ import RegisterPage from '../views/Auth/RegisterPage.vue';
 import Dashboard from '../views/Dashboard.vue';
 import FileTranscription from '../views/FileTranscription.vue';
 import RealtimeTranscription from '../views/RealtimeTranscription.vue';
-import TaskDetail from '../views/TaskDetail.vue';
 import HotwordManagement from '../views/HotwordManagement.vue';
 
 const routes = [
@@ -13,7 +12,6 @@ const routes = [
   { path: '/', component: Dashboard },
   { path: '/transcribe', component: FileTranscription },
   { path: '/realtime', component: RealtimeTranscription },
-  { path: '/task/:id', component: TaskDetail },
   { path: '/hotwords', component: HotwordManagement },
 ];
 

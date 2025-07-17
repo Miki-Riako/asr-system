@@ -1,10 +1,10 @@
 import os
-import whisper
-import torch
-import librosa
-import soundfile as sf
-from typing import List, Dict, Optional
 import logging
+import asyncio
+import websockets
+import json
+import wave
+from typing import List, Dict, Optional
 from datetime import datetime
 from .config import get_settings
 
@@ -12,213 +12,111 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 class ASREngine:
-    def __init__(self, model_size: str = None):
-        """
-        初始化ASR引擎
-        
-        Args:
-            model_size: Whisper模型大小 ("tiny", "base", "small", "medium", "large")
-                       如果为None，则使用配置文件中的设置
-        """
-        self.model = None
-        self.model_size = model_size or settings.ASR_MODEL_SIZE
-        self.language = settings.ASR_LANGUAGE
-        self.enable_gpu = settings.ASR_ENABLE_GPU
-        self.processing_timeout = settings.ASR_PROCESSING_TIMEOUT
-        self.initialized = False
+    def __init__(self):
+        """初始化ASR引擎"""
+        self.host = "127.0.0.1"  # FunASR服务地址
+        self.port = 10095       # FunASR服务端口
+        self.initialized = True  # FunASR服务是独立的Docker容器，不需要初始化
         
     def initialize(self):
-        """初始化ASR模型"""
+        """FunASR服务是独立的Docker容器，不需要初始化"""
+        pass
+    
+    async def _transcribe_with_funasr(self, audio_file_path: str) -> Dict:
+        """使用FunASR WebSocket客户端进行转写"""
         try:
-            # 检查设备设置
-            if self.enable_gpu and torch.cuda.is_available():
-                device = "cuda"
-                logger.info(f"使用GPU设备: {torch.cuda.get_device_name()}")
-            else:
-                device = "cpu"
-                if self.enable_gpu:
-                    logger.warning("GPU已启用但CUDA不可用，回退到CPU")
-                logger.info("使用CPU设备")
+            # 读取音频文件
+            with wave.open(audio_file_path, 'rb') as wav_file:
+                audio_bytes = wav_file.readframes(wav_file.getnframes())
+                sample_rate = wav_file.getframerate()
             
-            # 加载Whisper模型
-            logger.info(f"正在加载Whisper {self.model_size}模型...")
-            self.model = whisper.load_model(self.model_size, device=device)
+            # 连接WebSocket服务器
+            uri = f"ws://{self.host}:{self.port}"
+            logger.info(f"正在连接FunASR服务: {uri}")
             
-            self.initialized = True
-            logger.info(f"ASR引擎初始化成功 (模型: {self.model_size}, 设备: {device})")
-            
+            async with websockets.connect(uri, ping_interval=None) as websocket:
+                # 发送初始配置
+                config = {
+                    "mode": "offline",
+                    "chunk_size": [5, 10, 5],
+                    "chunk_interval": 10,
+                    "wav_name": os.path.basename(audio_file_path),
+                    "is_speaking": True,
+                    "audio_fs": sample_rate,
+                    "wav_format": "wav",
+                    "hotwords": "",
+                    "itn": True
+                }
+                await websocket.send(json.dumps(config))
+                logger.info("已发送配置信息")
+                
+                # 发送音频数据
+                await websocket.send(audio_bytes)
+                logger.info("已发送音频数据")
+                
+                # 发送结束标记
+                await websocket.send(json.dumps({"is_speaking": False}))
+                logger.info("已发送结束标记")
+                
+                # 接收转写结果
+                while True:
+                    try:
+                        result = await websocket.recv()
+                        logger.info(f"收到结果: {result}")
+                        
+                        if isinstance(result, str):
+                            try:
+                                # 尝试解析JSON结果
+                                json_result = json.loads(result)
+                                if "text" in json_result:
+                                    text = json_result["text"]
+                                else:
+                                    # 如果不是JSON或没有text字段，使用原始文本
+                                    text = result.split(": ")[-1].strip()
+                                
+                                # 构建标准格式的结果
+                                formatted_result = {
+                                    "text": text,
+                                    "language": "zh",
+                                    "segments": [{
+                                        "segment_id": 0,
+                                        "start_time": 0,
+                                        "end_time": 0,  # FunASR离线模式不提供时间戳
+                                        "text": text,
+                                        "confidence": 1.0  # FunASR离线模式不提供置信度
+                                    }],
+                                    "duration": 0,  # FunASR离线模式不提供时长
+                                    "processing_time": datetime.now().isoformat()
+                                }
+                                return formatted_result
+                            except json.JSONDecodeError:
+                                continue
+                    except websockets.exceptions.ConnectionClosed:
+                        break
+                
+                raise ValueError("未收到有效的转写结果")
+                    
         except Exception as e:
-            logger.error(f"ASR引擎初始化失败: {str(e)}")
-            self.initialized = False
+            logger.error(f"FunASR转写失败: {str(e)}")
             raise
     
     def transcribe_audio(self, audio_file_path: str, language: str = "zh") -> Dict:
-        """
-        转写音频文件
-        
-        Args:
-            audio_file_path: 音频文件路径
-            language: 语言代码 (默认为中文)
+        """转写音频文件"""
+        if not os.path.exists(audio_file_path):
+            raise FileNotFoundError(f"音频文件不存在: {audio_file_path}")
             
-        Returns:
-            包含转写结果的字典
-        """
-        if not self.initialized:
-            self.initialize()
-            
-        if not self.initialized:
-            raise RuntimeError("ASR引擎未能正确初始化")
-            
+        # 创建事件循环并运行WebSocket客户端
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            # 检查文件是否存在
-            if not os.path.exists(audio_file_path):
-                raise FileNotFoundError(f"音频文件不存在: {audio_file_path}")
-            
-            logger.info(f"开始转写音频文件: {audio_file_path}")
-            
-            # 使用Whisper进行转写
-            result = self.model.transcribe(
-                audio_file_path,
-                language=language,
-                word_timestamps=True,
-                verbose=False
-            )
-            
-            # 转换结果格式
-            formatted_result = self._format_transcription_result(result)
-            
-            logger.info(f"音频转写完成，生成了 {len(formatted_result['segments'])} 个分段")
-            
-            return formatted_result
-            
-        except Exception as e:
-            logger.error(f"音频转写失败: {str(e)}")
-            raise
-    
-    def _format_transcription_result(self, whisper_result: Dict) -> Dict:
-        """
-        格式化Whisper的转写结果为统一格式
-        
-        Args:
-            whisper_result: Whisper原始结果
-            
-        Returns:
-            格式化后的结果
-        """
-        segments = []
-        
-        # 处理segments
-        for i, segment in enumerate(whisper_result.get("segments", [])):
-            # 提取基本信息
-            segment_data = {
-                "segment_id": i,
-                "start_time": round(segment.get("start", 0), 2),
-                "end_time": round(segment.get("end", 0), 2),
-                "text": segment.get("text", "").strip(),
-                "confidence": self._calculate_confidence(segment)
-            }
-            
-            # 如果有词级别的时间戳，添加更详细的信息
-            if "words" in segment:
-                segment_data["words"] = [
-                    {
-                        "word": word.get("word", "").strip(),
-                        "start": round(word.get("start", 0), 2),
-                        "end": round(word.get("end", 0), 2),
-                        "probability": word.get("probability", 0.5)
-                    }
-                    for word in segment["words"]
-                ]
-            
-            segments.append(segment_data)
-        
-        return {
-            "text": whisper_result.get("text", "").strip(),
-            "language": whisper_result.get("language", "unknown"),
-            "segments": segments,
-            "duration": self._get_audio_duration(segments),
-            "processing_time": datetime.now().isoformat()
-        }
-    
-    def _calculate_confidence(self, segment: Dict) -> float:
-        """
-        计算分段的置信度
-        
-        Args:
-            segment: Whisper分段数据
-            
-        Returns:
-            置信度分数 (0.0-1.0)
-        """
-        # 如果有词级别的概率信息，计算平均值
-        if "words" in segment and segment["words"]:
-            probabilities = [word.get("probability", 0.5) for word in segment["words"]]
-            return round(sum(probabilities) / len(probabilities), 3)
-        
-        # 否则使用默认置信度估算
-        # 基于分段长度和其他启发式规则
-        text_length = len(segment.get("text", "").strip())
-        duration = segment.get("end", 0) - segment.get("start", 0)
-        
-        # 简单的置信度估算
-        if text_length == 0:
-            return 0.0
-        elif duration <= 0:
-            return 0.5
-        else:
-            # 基于语速的置信度估算 (合理语速约为2-6字符/秒)
-            speech_rate = text_length / duration
-            if 1 <= speech_rate <= 8:
-                return min(0.95, 0.6 + (speech_rate / 20))
-            else:
-                return 0.4
-    
-    def _get_audio_duration(self, segments: List[Dict]) -> float:
-        """获取音频总时长"""
-        if not segments:
-            return 0.0
-        return max(segment["end_time"] for segment in segments)
-    
-    def preprocess_audio(self, input_path: str, output_path: str = None) -> str:
-        """
-        预处理音频文件（格式转换、降噪等）
-        
-        Args:
-            input_path: 输入音频文件路径
-            output_path: 输出文件路径（可选）
-            
-        Returns:
-            处理后的音频文件路径
-        """
-        try:
-            # 如果没有指定输出路径，创建临时文件
-            if output_path is None:
-                import tempfile
-                base_name = os.path.splitext(os.path.basename(input_path))[0]
-                temp_dir = tempfile.gettempdir()
-                output_path = os.path.join(temp_dir, f"{base_name}_processed.wav")
-            
-            # 使用librosa加载和重采样音频
-            audio, original_sr = librosa.load(input_path, sr=None)
-            
-            # 重采样到16kHz（Whisper的标准采样率）
-            target_sr = 16000
-            if original_sr != target_sr:
-                audio = librosa.resample(audio, orig_sr=original_sr, target_sr=target_sr)
-            
-            # 保存处理后的音频
-            sf.write(output_path, audio, target_sr)
-            
-            logger.info(f"音频预处理完成: {input_path} -> {output_path}")
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"音频预处理失败: {str(e)}")
-            raise
+            result = loop.run_until_complete(self._transcribe_with_funasr(audio_file_path))
+            return result
+        finally:
+            loop.close()
     
     def get_supported_formats(self) -> List[str]:
         """获取支持的音频格式"""
-        return settings.ASR_SUPPORTED_FORMATS
+        return [".wav"]  # 目前只支持WAV格式
     
     def validate_audio_file(self, file_path: str) -> bool:
         """验证音频文件是否有效"""
@@ -228,10 +126,10 @@ class ASREngine:
             if ext not in self.get_supported_formats():
                 return False
             
-            # 尝试加载音频文件的元数据
-            duration = librosa.get_duration(path=file_path)
-            return duration > 0
-            
+            # 尝试打开WAV文件
+            with wave.open(file_path, 'rb') as wav_file:
+                return wav_file.getnframes() > 0
+                
         except Exception:
             return False
 

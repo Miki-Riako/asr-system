@@ -53,40 +53,6 @@
           <el-button type="warning" class="mt-4 w-full" @click="$router.push('/hotwords')">管理热词</el-button>
         </el-card>
       </div>
-      
-      <h3 class="text-xl font-bold mb-4">最近的转写任务</h3>
-      <el-table 
-        :data="recentTasks" 
-        style="width: 100%" 
-        class="mb-4" 
-        v-loading="loadingTasks"
-        :empty-text="tasksEmptyText"
-      >
-        <el-table-column prop="id" label="任务ID" width="220"></el-table-column>
-        <el-table-column prop="filename" label="文件名称"></el-table-column>
-        <el-table-column prop="status" label="状态" width="120">
-          <template #default="scope">
-            <el-tag :type="getStatusType(scope.row.status)">{{ getStatusText(scope.row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
-          <template #default="scope">
-            {{ formatDate(scope.row.created_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="scope">
-            <el-button 
-              type="primary" 
-              size="small" 
-              :disabled="scope.row.status !== 'completed'" 
-              @click="viewTask(scope.row)"
-            >
-              查看结果
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
     </main>
   </div>
 </template>
@@ -94,70 +60,29 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { authAPI, transcriptionAPI } from '../services/api';
+import { authAPI } from '../services/api';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
 const username = ref('用户');
-const recentTasks = ref([]);
-const loadingTasks = ref(false);
-const tasksEmptyText = ref('暂无转写任务');
 
 onMounted(async () => {
   try {
     // 获取当前用户信息
     const userData = await authAPI.getCurrentUser();
     username.value = userData.username;
-    
-    // 获取最近的转写任务
-    loadingTasks.value = true;
-    const tasks = await transcriptionAPI.getUserTasks();
-    recentTasks.value = tasks;
   } catch (err) {
     console.error('加载数据失败', err);
     if (err.response?.status === 401) {
       ElMessage.error('登录已过期，请重新登录');
       logout();
-    } else {
-      tasksEmptyText.value = '加载任务失败，请刷新重试';
     }
-  } finally {
-    loadingTasks.value = false;
   }
 });
 
 function logout() {
   localStorage.removeItem('token');
   router.push('/login');
-}
-
-function viewTask(task) {
-  router.push(`/task/${task.id}`);
-}
-
-function getStatusType(status) {
-  const statusMap = {
-    'pending': 'info',
-    'processing': 'warning',
-    'completed': 'success',
-    'failed': 'danger'
-  };
-  return statusMap[status] || 'info';
-}
-
-function getStatusText(status) {
-  const statusMap = {
-    'pending': '等待处理',
-    'processing': '处理中',
-    'completed': '已完成',
-    'failed': '失败'
-  };
-  return statusMap[status] || status;
-}
-
-function formatDate(dateString) {
-  const date = new Date(dateString);
-  return date.toLocaleString('zh-CN');
 }
 </script>
 
@@ -170,25 +95,5 @@ function formatDate(dateString) {
 :deep(.el-card__header) {
   background-color: rgba(17, 24, 39, 0.4);
   padding: 12px 16px;
-}
-
-:deep(.el-table) {
-  background-color: transparent !important;
-}
-
-:deep(.el-table th.el-table__cell) {
-  background-color: #1f2937 !important;
-}
-
-:deep(.el-table tr) {
-  background-color: #374151 !important;
-}
-
-:deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
-  background-color: #4b5563 !important;
-}
-
-:deep(.el-table__body tr:hover > td.el-table__cell) {
-  background-color: #6b7280 !important;
 }
 </style> 
