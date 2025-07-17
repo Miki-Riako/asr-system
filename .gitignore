@@ -4,6 +4,12 @@ asr_system_frontend/package-lock.json
 funasr-runtime-resources
 
 asr_system.db
+.backend_info.txt
+.backend.pid
+.frontend_info.txt
+.frontend.pid
+
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
