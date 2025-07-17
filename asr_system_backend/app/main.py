@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import transcription, auth, realtime_websocket
+# 1. 导入我们所有需要的路由模块
+from .routers import transcription, auth, realtime_websocket, polling_ws_realtime
 from .models import Base, engine
 from .config import get_settings
 
@@ -20,7 +21,10 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# 文件路径: asr_system_backend/app/main.py
+# ...
 # 包含路由
 app.include_router(auth.router, tags=["认证"])
 app.include_router(transcription.router, tags=["转写"]) 
-app.include_router(realtime_websocket.router, tags=["实时转写"]) 
+# 确保这一行是存在的
+app.include_router(realtime_websocket.router, tags=["实时转写"])
