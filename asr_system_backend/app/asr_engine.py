@@ -17,7 +17,7 @@ class ASREngine:
         self.host = "127.0.0.1"  # FunASR服务地址
         self.port = 10095       # FunASR服务端口
         self.initialized = True  # FunASR服务是独立的Docker容器，不需要初始化
-        
+    
     def initialize(self):
         """FunASR服务是独立的Docker容器，不需要初始化"""
         pass
@@ -100,6 +100,19 @@ class ASREngine:
             logger.error(f"FunASR转写失败: {str(e)}")
             raise
     
+    async def _transcribe_with_funasr(self, audio_stream):
+        uri = f"ws://{self.host}:{self.port}"
+        async with websockets.connect(uri) as ws:
+            # 发送实时音频流
+            while True:
+                chunk = await audio_stream.read(640)  # 40ms的16kHz 16bit音频
+                if not chunk:
+                    break
+                await ws.send(chunk)
+                # 接收转写结果
+                result = await ws.recv()
+                yield json.loads(result)
+    
     def transcribe_audio(self, audio_file_path: str, language: str = "zh") -> Dict:
         """转写音频文件"""
         if not os.path.exists(audio_file_path):
@@ -138,4 +151,4 @@ asr_engine = ASREngine()
 
 def get_asr_engine() -> ASREngine:
     """获取ASR引擎实例"""
-    return asr_engine 
+    return asr_engine

@@ -652,6 +652,16 @@ function writeString(view, offset, string) {
     view.setUint8(offset + i, string.charCodeAt(i));
   }
 }
+// 在发送音频数据前添加重采样处理
+const resampleAudio = (audioData, inputRate=48000, outputRate=16000) => {
+  const ratio = inputRate / outputRate;
+  const length = Math.round(audioData.length / ratio);
+  const result = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    result[i] = audioData[Math.round(i * ratio)];
+  }
+  return result;
+};
 </script>
 
 <style scoped>
@@ -694,4 +704,4 @@ function writeString(view, offset, string) {
   background-color: #4b5563;
   border-radius: 3px;
 }
-</style> 
+</style>

@@ -1,10 +1,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./asr_system.db"
+# 将变量名改为DATABASE_URL
+DATABASE_URL = "sqlite:///./asr_system.db"
 
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    DATABASE_URL,  # 使用新变量名
+    connect_args={"check_same_thread": False}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -15,4 +17,4 @@ def get_db():
     try:
         yield db
     finally:
-        db.close() 
+        db.close()

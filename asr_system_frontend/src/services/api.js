@@ -7,22 +7,12 @@ axios.defaults.withCredentials = true;  // 允许跨域请求携带凭证
 const WS_BASE_URL = '';  // 空字符串表示使用相对路径
 
 // 请求拦截器：添加认证token
-axios.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    // 确保Content-Type正确设置
-    if (config.data instanceof FormData) {
-      config.headers['Content-Type'] = 'multipart/form-data';
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+// 确保拦截器正常工作
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  config.headers.Authorization = `Bearer ${token}`; // 需要确认token存在
+  return config;
+});
 
 // 响应拦截器：处理401错误
 axios.interceptors.response.use(
@@ -150,4 +140,4 @@ export const realtimeAPI = {
       websocket.send(JSON.stringify(command));
     }
   }
-}; 
+};
