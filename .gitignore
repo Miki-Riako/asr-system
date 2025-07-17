@@ -9,6 +9,8 @@ asr_system.db
 .frontend_info.txt
 .frontend.pid
 
+my_output.txt
+
 *.pt
 
 # Byte-compiled / optimized / DLL files

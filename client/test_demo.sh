@@ -1,1 +1,1 @@
-python ./client/funasr_wss_client.py       --host "127.0.0.1"       --port 10095       --mode offline       --audio_in "./client/BAC009S0764W0179.wav"
+python3 ./client/funasr_wss_client.py       --host "127.0.0.1"       --port 10095       --mode offline       --audio_in "./client/BAC009S0764W0179.wav"
