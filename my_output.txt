@@ -734,6 +734,209 @@ if __name__ == "__main__":
 
 --------------------------------------------------------------------------------
 
+File: hotwords_proc.py
+```python
+from multiprocessing import Queue, Process
+import websockets, ssl, asyncio, json, os, argparse
+import wave # For .wav file handling
+
+parser = argparse.ArgumentParser(description="ASR Client for Single Audio File Processing")
+parser.add_argument("--host", type=str, default="localhost", help="Host IP for the WebSocket server (e.g., localhost, 0.0.0.0).")
+parser.add_argument("--port", type=int, default=10095, help="Port for the WebSocket server.")
+parser.add_argument("--audio_in", type=str, required=True, help="Path to the input audio file (e.g., .wav, .pcm).")
+parser.add_argument("--hotword", type=str, default="", help="Path to the hotword file (optional). If provided, ASR will also run with hotwords.")
+parser.add_argument("--ssl", type=int, default=1, choices=[0, 1], help="Use SSL/WSS. 1 for yes, 0 for no.")
+parser.add_argument("--use_itn", type=int, default=1, choices=[0, 1], help="Use Inverse Text Normalization (ITN). 1 for yes, 0 for no.")
+
+args = parser.parse_args()
+args.chunk_size = [5, 10, 5]
+args.chunk_interval = 10
+args.audio_fs = 16000
+args.thread_num = 1
+
+voices = Queue()
+offline_msg_done = False
+
+async def record_from_file(file_path):
+    global voices
+    
+    wav_name = os.path.basename(file_path)
+    audio_bytes = b''
+    sample_rate = args.audio_fs
+    wav_format = "pcm"
+
+    try:
+        if file_path.endswith(".pcm"):
+            with open(file_path, "rb") as f:
+                audio_bytes = f.read()
+        elif file_path.endswith(".wav"):
+            with wave.open(file_path, "rb") as wav_file:
+                sample_rate = wav_file.getframerate()
+                frames = wav_file.readframes(wav_file.getnframes())
+                audio_bytes = bytes(frames)        
+        else:
+            wav_format = "others"
+            with open(file_path, "rb") as f:
+                audio_bytes = f.read()
+    except FileNotFoundError:
+        print(f"Error: Audio file not found at {file_path}")
+        return
+    except Exception as e:
+        print(f"Error reading audio file {file_path}: {e}")
+        return
+
+    fst_dict = {}
+    hotword_msg = ""
+    if args.hotword.strip() != "":
+        try:
+            with open(args.hotword, encoding='utf-8') as f_hotword:
+                hot_lines = f_hotword.readlines()
+                for line in hot_lines:
+                    words = line.strip().split(" ")
+                    if len(words) < 2:
+                        continue
+                    try:
+                        fst_dict[" ".join(words[:-1])] = int(words[-1])
+                    except ValueError:
+                        continue
+            hotword_msg=json.dumps(fst_dict)
+        except FileNotFoundError:
+            print(f"Warning: Hotword file '{args.hotword}' not found. Proceeding without hotwords.")
+            hotword_msg = ""
+
+    use_itn=True
+    if args.use_itn == 0:
+        use_itn=False
+
+    stride = int(60 * args.chunk_size[1] / args.chunk_interval / 1000 * sample_rate * 2)
+    if stride == 0:
+        stride = 1600
+        
+    chunk_num = (len(audio_bytes) - 1) // stride + 1 if stride > 0 else 1
+
+    message = json.dumps({"mode": "offline", "chunk_size": args.chunk_size, "chunk_interval": args.chunk_interval, "audio_fs":sample_rate, "wav_name": wav_name, "wav_format": wav_format, "is_speaking": True, "hotwords":hotword_msg, "itn": use_itn})
+    await websocket.send(message)
+    
+    is_speaking = True
+    for i in range(chunk_num):
+        beg = i * stride
+        data = audio_bytes[beg:min(beg + stride, len(audio_bytes))]
+        if not data:
+            break
+        await websocket.send(data)
+        if i == chunk_num - 1:
+            is_speaking = False
+            message = json.dumps({"is_speaking": is_speaking})
+            await websocket.send(message)
+        
+        sleep_duration = 0.001
+        await asyncio.sleep(sleep_duration)
+    
+    global offline_msg_done
+    while not offline_msg_done:
+        await asyncio.sleep(0.1)
+
+async def message(result_queue):
+    global websocket, offline_msg_done
+    try:
+        while True:
+            meg = await websocket.recv()
+            if isinstance(meg, str):
+                meg_dict = json.loads(meg)
+                text = meg_dict.get("text", "")
+                
+                if meg_dict.get("mode") == "offline":
+                    result_queue.put(text)
+                    offline_msg_done = True
+                    break
+                elif meg_dict.get("is_final", False):
+                    result_queue.put(text)
+                    offline_msg_done = True
+                    break
+                else:
+                    result_queue.put(text)
+            else:
+                pass
+    except websockets.exceptions.ConnectionClosedOK:
+        print("WebSocket connection closed normally.")
+    except Exception as e:
+        print(f"Exception in message receiver: {e}")
+    finally:
+        offline_msg_done = True
+
+async def ws_client(id, audio_path, result_queue):
+    global websocket, voices, offline_msg_done
+
+    offline_msg_done = False
+
+    if args.ssl == 1:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        uri = f"wss://{args.host}:{args.port}"
+    else:
+        uri = f"ws://{args.host}:{args.port}"
+        ssl_context = None
+
+    try:
+        async with websockets.connect(uri, subprotocols=["binary"], ping_interval=None, ssl=ssl_context) as websocket_conn:
+            websocket = websocket_conn
+            
+            audio_task = asyncio.create_task(record_from_file(audio_path))
+            message_task = asyncio.create_task(message(result_queue))
+            
+            await asyncio.gather(audio_task, message_task)
+    except Exception as e:
+        print(f"WebSocket client error for {audio_path}: {e}")
+    finally:
+        offline_msg_done = True
+
+def run_audio(audio_file_path, hotwords_file_path=""):
+    global args
+    args.audio_in = audio_file_path
+    args.hotword = hotwords_file_path
+
+    result_queue = Queue()
+
+    p = Process(target=one_thread, args=(0, 0, 1, result_queue))
+    p.start()
+    p.join()
+
+    result_list = []
+    while not result_queue.empty():
+        result_list.append(result_queue.get())
+    
+    processed_result = "\n".join(set(result_list)).replace(' ', '').replace('，', '')
+    return processed_result
+
+def one_thread(id, chunk_begin, chunk_size, result_queue):
+    asyncio.get_event_loop().run_until_complete(ws_client(id, args.audio_in, result_queue))
+
+if __name__ == '__main__':
+    
+    input_audio_path = args.audio_in
+    hotword_file_path = args.hotword
+
+    print(f"--- Processing Audio: {input_audio_path} ---")
+
+    print("\n--- ASR Result (No Hotwords) ---")
+    result_no_hotword = run_audio(input_audio_path, "").strip()
+    print(f"Result: {result_no_hotword}")
+
+    result_with_hotword = ""
+    if hotword_file_path and os.path.exists(hotword_file_path):
+        print(f"\n--- ASR Result (With Hotwords from: {hotword_file_path}) ---")
+        result_with_hotword = run_audio(input_audio_path, hotword_file_path).strip()
+        print(f"Result: {result_with_hotword}")
+    else:
+        print("\n--- No hotword file provided or found, skipping ASR with hotwords. ---")
+    
+    print("\n--- Processing Finished ---")
+    # python hotwords_proc.py --host localhost --port 10095 --audio_in ./samples/audio/example.wav --hotword ./samples/hotwords.txt
+```
+
+--------------------------------------------------------------------------------
+
 File: docker.md
 ```markdown
 ## 本地部署Docker
@@ -1360,6 +1563,8 @@ asr_system.db
 .backend.pid
 .frontend_info.txt
 .frontend.pid
+
+my_output.txt
 
 *.pt
 
@@ -2430,6 +2635,19 @@ A: 检查文件格式是否支持，以及文件大小是否超过限制。
 
 --------------------------------------------------------------------------------
 
+File: docker.sh
+```shell
+#!/bin/bash
+
+# 第一步：重启容器
+sudo docker start funasr_server
+
+# 第二步：进入容器
+sudo docker exec -it funasr_server /bin/bash
+```
+
+--------------------------------------------------------------------------------
+
 File: asr_system_frontend/env.example
 ```text
 # 前端环境变量配置模板
@@ -3403,46 +3621,41 @@ File: asr_system_frontend/src/assets/css/main.css
 File: asr_system_frontend/src/views/RealtimeTranscription.vue
 ```text
 <template>
-  <div class="min-h-screen bg-gray-900 text-gray-200">
-    <header class="bg-gray-800 py-4 shadow-md">
+  <div class="h-screen bg-gray-900 text-gray-200 flex flex-col">
+    <header class="bg-gray-800 py-4 shadow-md flex-shrink-0">
       <div class="container mx-auto px-4 flex justify-between items-center">
-        <h1 class="text-xl font-bold text-blue-400">录音转写</h1>
+        <h1 class="text-xl font-bold text-blue-400">语音AI助手</h1>
         <el-button type="primary" @click="$router.push('/')">返回首页</el-button>
       </div>
     </header>
     
-    <main class="container mx-auto py-8 px-4 max-w-6xl">
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- 左侧：控制面板 (UI保持原样) -->
+    <main class="container mx-auto py-8 px-4 flex-grow flex min-h-0">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-full">
+        
+        <!-- ======================================================= -->
+        <!-- 左侧控制面板 -->
+        <!-- ======================================================= -->
         <div class="lg:col-span-1">
           <el-card class="bg-gray-800 border-none shadow-lg">
             <template #header>
-              <div class="flex items-center">
+              <div class="flex items-center header-text">
                 <el-icon class="mr-2"><microphone /></el-icon>
                 <span>录音控制</span>
               </div>
             </template>
-            
-            <div class="space-y-4 p-2">
-              <!-- 录音控制按钮 -->
-              <div class="flex flex-col gap-3">
-                <el-button 
-                  :type="isRecording ? 'danger' : 'primary'"
-                  :disabled="isLoading"
-                  :loading="isLoading"
-                  @click="toggleRecording"
-                  size="large"
-                  class="w-full"
-                >
-                  <el-icon class="mr-2">
-                    <component :is="isRecording ? 'VideoPause' : 'VideoPlay'" />
-                  </el-icon>
-                  {{ buttonText }}
-                </el-button>
-              </div>
-
-              <!-- 状态和时长显示 -->
-              <div class="bg-gray-700 p-3 rounded text-center">
+            <div class="space-y-6 p-4 flex flex-col items-center">
+              <el-button 
+                :type="isRecording ? 'danger' : 'primary'"
+                :disabled="isLoading"
+                @click="toggleRecording"
+                size="large"
+                class="w-full h-12"
+              >
+                <el-icon class="mr-2"><component :is="isRecording ? 'VideoPause' : 'Microphone'" /></el-icon>
+                {{ isRecording ? '停止录音' : '开始录音' }}
+              </el-button>
+              
+              <div class="bg-gray-700 p-4 rounded text-center w-full">
                 <div class="text-sm text-gray-400">当前状态</div>
                 <div class="text-lg font-semibold mt-1" :class="statusClass">
                   {{ statusText }}
@@ -3452,223 +3665,341 @@ File: asr_system_frontend/src/views/RealtimeTranscription.vue
                 </div>
               </div>
 
+              <div v-if="isRecording" class="w-full flex flex-col items-center gap-2 pt-4">
+                <div class="text-sm text-gray-400">实时音量</div>
+                <el-progress type="dashboard" :percentage="audioLevel" :color="progressColors" />
+              </div>
             </div>
           </el-card>
         </div>
         
-        <!-- 右侧：转写结果 (UI保持原样) -->
-        <div class="lg:col-span-2">
-          <el-card class="bg-gray-800 border-none shadow-lg">
+        <!-- ======================================================= -->
+        <!-- 右侧交互区 (采用能实现滚动的标准布局) -->
+        <!-- ======================================================= -->
+        <div class="lg:col-span-2 flex flex-col h-full">
+          <el-card class="bg-gray-800 border-none shadow-lg flex flex-col flex-grow">
             <template #header>
-              <div class="flex items-center justify-between">
-                <div class="flex items-center">
-                  <el-icon class="mr-2"><document /></el-icon>
-                  <span>转写结果</span>
-                </div>
-                <div class="flex gap-2">
-                  <el-button size="small" @click="clearResult" :disabled="isLoading">清空结果</el-button>
-                  <el-button size="small" @click="exportResult" :disabled="!transcriptionResult || isLoading">导出文本</el-button>
-                </div>
+              <div class="flex items-center justify-between header-text">
+                <span>AI 对话</span>
+                <el-button size="small" type="danger" plain @click="clearChat" :disabled="chatHistory.length === 0">清空对话</el-button>
               </div>
             </template>
             
-            <div 
-              class="bg-gray-700 p-4 rounded min-h-[400px] max-h-[500px] overflow-y-auto"
-            >
-              <!-- 加载状态 -->
-              <div v-if="isLoading" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
-                <el-icon class="is-loading text-4xl mb-4 text-blue-400"><loading /></el-icon>
-                <p>正在努力转写中，请稍候...</p>
-              </div>
-              <!-- 空状态 -->
-              <div v-else-if="!transcriptionResult" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
-                <el-icon class="text-5xl mb-2"><files /></el-icon>
-                <p>点击“开始录音”，结束后结果将显示在这里</p>
-              </div>
-              <!-- 显示结果 -->
-              <div v-else class="text-white text-lg leading-relaxed whitespace-pre-wrap">
-                {{ transcriptionResult }}
-              </div>
+            <!-- 【核心】可滚动的聊天记录区域 -->
+            <div ref="chatContainer" class="flex-grow p-4 space-y-4 overflow-y-auto min-h-0">
+                <div v-if="chatHistory.length === 0 && !isLoading" class="flex items-center justify-center h-full text-center text-gray-500">
+                  <div>
+                    <el-icon class="text-5xl mb-4"><MagicStick /></el-icon>
+                    <p>请通过录音或手动输入开始对话</p>
+                  </div>
+                </div>
+                <div v-for="(item, index) in chatHistory" :key="index" :class="item.role === 'user' ? 'user-message' : 'assistant-message'">
+                    <div class="message-bubble" :class="item.role">
+                        <pre class="whitespace-pre-wrap font-sans">{{ item.content }}</pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 【核心】固定在底部的输入框和按钮 -->
+            <div class="input-area p-4 border-t border-gray-700 mt-auto flex-shrink-0">
+                <div class="flex items-center gap-2">
+                    <el-input
+                        v-model="promptText"
+                        placeholder="识别后的文字将显示在这里，可编辑"
+                        size="large"
+                        @keyup.enter="sendPrompt"
+                        :disabled="isLoading"
+                    />
+                    <el-button @click="sendPrompt" type="primary" size="large" :disabled="!promptText || isLoading" :loading="isLoading">
+                        <el-icon><Promotion /></el-icon>
+                        <span class="ml-2">运行</span>
+                    </el-button>
+                </div>
             </div>
           </el-card>
         </div>
       </div>
     </main>
   </div>
-</template>
+</template>```
 
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
-import { ElMessage } from 'element-plus';
-import { Microphone, Document, VideoPlay, VideoPause, Loading, Files } from '@element-plus/icons-vue';
+import { ref, computed, onUnmounted, nextTick } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Microphone, VideoPause, Promotion, MagicStick } from '@element-plus/icons-vue';
+import axios from 'axios';
 
-// --- 状态管理 ---
+// --- 状态管理 (无变化) ---
 const isRecording = ref(false);
 const isLoading = ref(false);
 const mediaRecorder = ref(null);
 const audioChunks = ref([]);
-const transcriptionResult = ref('');
 const recordingDuration = ref(0);
 let recordingTimer = null;
+const audioLevel = ref(0);
+let animationFrameId = null;
 
-// --- UI 计算属性 ---
-const buttonText = computed(() => {
-  if (isLoading.value) return '正在转写...';
-  return isRecording.value ? '停止录音' : '开始录音';
-});
+const promptText = ref('');
+const chatHistory = ref([]);
+const chatContainer = ref(null);
 
+const progressColors = [
+  { color: '#67c23a', percentage: 60 },
+  { color: '#e6a23c', percentage: 80 },
+  { color: '#f56c6c', percentage: 100 },
+];
+
+// --- UI 计算属性 (无变化) ---
 const statusText = computed(() => {
-  if (isLoading.value) return '正在处理';
-  if (isRecording.value) return '正在录音';
+  if (isRecording.value) return '正在录音...';
+  if (isLoading.value) return 'AI思考中...';
   return '空闲';
 });
-
 const statusClass = computed(() => {
-  if (isLoading.value) return 'text-blue-400';
   if (isRecording.value) return 'text-red-400';
+  if (isLoading.value) return 'text-blue-400';
   return 'text-green-400';
 });
 
-// --- 生命周期钩子 ---
+// --- 生命周期 (无变化) ---
 onUnmounted(() => {
-  if (mediaRecorder.value && mediaRecorder.value.state !== 'inactive') {
-    mediaRecorder.value.stop();
-  }
-  if (recordingTimer) {
-    clearInterval(recordingTimer);
-  }
+  stopAudioProcessing();
 });
 
-// --- 核心功能函数 (与上一版相同，但现在会驱动这个UI) ---
+// --- 核心函数 ---
 
 const toggleRecording = () => {
-  if (!isRecording.value) {
-    startRecording();
-  } else {
-    stopRecording();
-  }
+  if (isLoading.value) return;
+  isRecording.value ? stopRecording() : startRecording();
 };
 
 const startRecording = async () => {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    ElMessage.error('您的浏览器不支持录音功能。');
-    return;
-  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    
     audioChunks.value = [];
-    transcriptionResult.value = '';
-    
     mediaRecorder.value = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-
-    mediaRecorder.value.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunks.value.push(event.data);
-      }
-    };
-
+    mediaRecorder.value.ondataavailable = event => audioChunks.value.push(event.data);
     mediaRecorder.value.onstop = () => {
       transcribeAudio();
-      stream.getTracks().forEach(track => track.stop());
+      stopAudioProcessing(stream);
     };
-
     mediaRecorder.value.start();
     isRecording.value = true;
-
-    recordingDuration.value = 0;
-    recordingTimer = setInterval(() => {
-      recordingDuration.value++;
-    }, 1000);
-
+    startAudioProcessing(stream);
+    recordingTimer = setInterval(() => recordingDuration.value++, 1000);
   } catch (error) {
-    console.error('无法开始录音:', error);
-    ElMessage.error('无法启动录音功能，请检查麦克风权限。');
+    ElMessage.error('无法启动录音，请检查麦克风权限。');
   }
 };
 
 const stopRecording = () => {
-  if (mediaRecorder.value && mediaRecorder.value.state === 'recording') {
+  if (mediaRecorder.value) {
     mediaRecorder.value.stop();
-    isRecording.value = false;
-    clearInterval(recordingTimer);
   }
 };
 
+// 【功能1：音频转写 - 已是正确版本，无需修改】
 const transcribeAudio = async () => {
-  if (audioChunks.value.length === 0) {
-    ElMessage.warning('录音内容过短，未进行转写。');
-    return;
-  }
-
+  if (audioChunks.value.length === 0) return;
   isLoading.value = true;
-  transcriptionResult.value = '';
-
+  ElMessage.info('正在转写音频...');
   const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
   const formData = new FormData();
-  formData.append('file', audioBlob, `recording-${Date.now()}.webm`);
+  formData.append('file', audioBlob, `recording.webm`);
 
   try {
-    const response = await fetch('/api/asr/transcribe/file', {
-      method: 'POST',
-      body: formData,
+    const response = await axios.post('/api/asr/transcribe/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || '转写请求失败');
-    }
-
-    const data = await response.json();
-    transcriptionResult.value = data.result || '未能识别出任何内容。';
-    ElMessage.success('转写完成！');
-
+    promptText.value = response.data.result || '';
+    if (response.data.result) ElMessage.success('语音识别成功！');
+    else ElMessage.warning('未能识别出任何内容。');
   } catch (error) {
-    console.error('转写失败:', error);
-    ElMessage.error('转写失败: ' + error.message);
-    transcriptionResult.value = `错误: ${error.message}`;
+    const detail = error.response?.data?.detail || '音频转写服务失败';
+    ElMessage.error(detail);
   } finally {
     isLoading.value = false;
   }
 };
 
-// --- 辅助UI函数 ---
+// =======================================================
+// 【功能2：发送Prompt给AI - 替换为真实API调用】
+// =======================================================
+const sendPrompt = async () => {
+    if (!promptText.value.trim() || isLoading.value) return;
 
+    isLoading.value = true;
+    const currentPrompt = promptText.value;
+    chatHistory.value.push({ role: 'user', content: currentPrompt });
+    promptText.value = '';
+
+    await nextTick();
+    scrollToBottom();
+
+    const assistantMessageIndex = chatHistory.value.length;
+    chatHistory.value.push({ role: 'assistant', content: '' });
+
+    try {
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            },
+            body: JSON.stringify({ 
+                prompt: currentPrompt,
+                temperature: 0.7,
+                max_tokens: 4000
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`DeepSeek服务错误: ${response.status} ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.content) {
+                            chatHistory.value[assistantMessageIndex].content += data.content;
+                        } else if (data.error) {
+                            chatHistory.value[assistantMessageIndex].content = `DeepSeek错误: ${data.error}`;
+                            break;
+                        } else if (data.done) {
+                            // 添加模型信息到消息
+                            if (data.model) {
+                                console.log(`回复由 ${data.model} 生成`);
+                            }
+                            break;
+                        }
+                    } catch (e) {
+                        // 忽略JSON解析错误
+                    }
+                }
+            }
+            
+            scrollToBottom();
+        }
+
+    } catch (error) {
+        chatHistory.value[assistantMessageIndex].content = `抱歉，与DeepSeek模型通信时出错: ${error.message}`;
+        ElMessage.error(error.message);
+    } finally {
+        isLoading.value = false;
+    }
+};
+
+// --- 音量可视化函数 (无变化) ---
+const startAudioProcessing = (stream) => {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const analyserNode = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyserNode);
+    analyserNode.smoothingTimeConstant = 0.8;
+    analyserNode.fftSize = 256;
+    
+    const update = () => {
+        const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+        analyserNode.getByteFrequencyData(dataArray);
+        const rms = Math.sqrt(dataArray.reduce((sum, val) => sum + val * val, 0) / dataArray.length);
+        audioLevel.value = Math.min(100, Math.round((rms / 128) * 100));
+        animationFrameId = requestAnimationFrame(update);
+    };
+    update();
+};
+const stopAudioProcessing = (stream = null) => {
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    isRecording.value = false;
+    clearInterval(recordingTimer);
+    recordingDuration.value = 0;
+    audioLevel.value = 0;
+};
+
+// --- 辅助函数 (无变化) ---
 const formatTime = (seconds) => {
   const m = String(Math.floor(seconds / 60)).padStart(2, '0');
   const s = String(seconds % 60).padStart(2, '0');
   return `${m}:${s}`;
 };
-
-const clearResult = () => {
-  transcriptionResult.value = '';
+const clearChat = () => {
+    ElMessageBox.confirm('确定要清空所有对话记录吗？', '确认', { type: 'warning' })
+        .then(() => {
+            chatHistory.value = [];
+            promptText.value = '';
+            ElMessage.success('对话已清空');
+        }).catch(() => {});
 };
-
-const exportResult = () => {
-  if (!transcriptionResult.value) {
-    ElMessage.warning('没有可导出的结果');
-    return;
-  }
-  const blob = new Blob([transcriptionResult.value], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `录音转写结果.txt`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+const scrollToBottom = () => {
+    if (chatContainer.value) {
+        chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+    }
 };
 </script>
 
 <style scoped>
-:deep(.el-card) {
-  background-color: #374151;
-  border: none;
-}
+/* 卡片头部的文字颜色 */
 :deep(.el-card__header) {
-  background-color: rgba(17, 24, 39, 0.4);
-  padding: 12px 16px;
+  color: #e5e7eb; 
+  flex-shrink: 0; /* 确保 header 不会被压缩 */
+}
+
+/* 【关键】让 el-card 的主体部分成为 flex 容器，以便内部分区能占满空间 */
+:deep(.el-card__body) {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1; /* 让 body 填满 card 的剩余空间 */
+  min-height: 0; /* 这是 flex 布局中的一个关键技巧，防止子元素溢出 */
+}
+
+/* 音量条百分比文字颜色 */
+:deep(.el-progress__text) {
+    color: #e5e7eb !important;
+}
+
+.header-text {
+    color: #e5e7eb;
+}
+
+/* 聊天气泡样式 */
+.user-message, .assistant-message {
+  display: flex;
+  margin-bottom: 1rem;
+}
+.user-message {
+  justify-content: flex-end;
+}
+.assistant-message {
+  justify-content: flex-start;
+}
+.message-bubble {
+  max-width: 85%;
+  padding: 0.75rem 1rem;
+  border-radius: 1rem;
+  line-height: 1.6;
+  font-size: 1rem;
+}
+.message-bubble.user {
+  background-color: #3b82f6;
+  color: white;
+  border-bottom-right-radius: 0.25rem;
+}
+.message-bubble.assistant {
+  background-color: #4b5563;
+  color: #e5e7eb;
+  border-bottom-left-radius: 0.25rem;
 }
 </style>
 ```
@@ -7140,7 +7471,7 @@ if __name__ == "__main__":
 
 File: client/test_demo.sh
 ```shell
-python ./client/funasr_wss_client.py       --host "127.0.0.1"       --port 10095       --mode offline       --audio_in "./client/BAC009S0764W0179.wav"
+python3 ./client/funasr_wss_client.py       --host "127.0.0.1"       --port 10095       --mode offline       --audio_in "./client/BAC009S0764W0179.wav"
 ```
 
 --------------------------------------------------------------------------------
@@ -7612,6 +7943,54 @@ setup(
 
 --------------------------------------------------------------------------------
 
+File: asr_system_backend/check_db_script.py
+```python
+#!/usr/bin/env python3
+"""
+检查现有数据库表结构
+"""
+import sqlite3
+import os
+
+def check_database_structure():
+    db_path = "./asr_system.db"
+    
+    if not os.path.exists(db_path):
+        print("数据库文件不存在")
+        return
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    try:
+        # 获取所有表名
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        
+        print("数据库中的表:")
+        for table in tables:
+            table_name = table[0]
+            print(f"\n表: {table_name}")
+            
+            # 获取表结构
+            cursor.execute(f"PRAGMA table_info({table_name});")
+            columns = cursor.fetchall()
+            
+            print("列信息:")
+            for col in columns:
+                print(f"  {col[1]} {col[2]} {'NOT NULL' if col[3] else 'NULL'} {'PRIMARY KEY' if col[5] else ''}")
+                
+    except Exception as e:
+        print(f"检查数据库时出错: {e}")
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    check_database_structure()
+```
+
+--------------------------------------------------------------------------------
+
 File: asr_system_backend/alembic.ini
 ```ini
 # A generic, single database configuration.
@@ -7908,6 +8287,149 @@ if __name__ == "__main__":
 
 --------------------------------------------------------------------------------
 
+File: asr_system_backend/migrate_db_script.py
+```python
+#!/usr/bin/env python3
+"""
+数据库迁移脚本 - 修复表结构
+"""
+import sqlite3
+import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def migrate_database():
+    db_path = "./asr_system.db"
+    
+    if not os.path.exists(db_path):
+        logger.error("数据库文件不存在")
+        return False
+    
+    # 备份数据库
+    backup_path = f"{db_path}.backup"
+    import shutil
+    shutil.copy2(db_path, backup_path)
+    logger.info(f"数据库已备份到: {backup_path}")
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    try:
+        # 检查 transcription_tasks 表是否存在 result 列
+        cursor.execute("PRAGMA table_info(transcription_tasks);")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        logger.info(f"transcription_tasks 表现有列: {column_names}")
+        
+        # 如果没有 result 列，添加它
+        if 'result' not in column_names:
+            logger.info("添加 result 列...")
+            cursor.execute("ALTER TABLE transcription_tasks ADD COLUMN result TEXT;")
+            
+        # 检查其他可能缺少的列
+        expected_columns = [
+            ('result', 'TEXT'),
+            ('terminal_output', 'TEXT'),
+            ('error_message', 'TEXT'),
+            ('completed_at', 'DATETIME')
+        ]
+        
+        for col_name, col_type in expected_columns:
+            if col_name not in column_names:
+                logger.info(f"添加 {col_name} 列...")
+                cursor.execute(f"ALTER TABLE transcription_tasks ADD COLUMN {col_name} {col_type};")
+        
+        # 检查 transcription_segments 表是否存在
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transcription_segments';")
+        if not cursor.fetchone():
+            logger.info("创建 transcription_segments 表...")
+            cursor.execute("""
+                CREATE TABLE transcription_segments (
+                    id VARCHAR PRIMARY KEY,
+                    task_id VARCHAR NOT NULL,
+                    segment_id INTEGER NOT NULL,
+                    start_time FLOAT NOT NULL,
+                    end_time FLOAT NOT NULL,
+                    text TEXT NOT NULL,
+                    confidence FLOAT,
+                    FOREIGN KEY(task_id) REFERENCES transcription_tasks (id)
+                );
+            """)
+        
+        conn.commit()
+        logger.info("✅ 数据库迁移完成")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ 数据库迁移失败: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    success = migrate_database()
+    if success:
+        print("🎉 数据库迁移成功！")
+    else:
+        print("❌ 数据库迁移失败")
+        print("可以使用备份文件恢复数据库")
+```
+
+--------------------------------------------------------------------------------
+
+File: asr_system_backend/create_tables_script.py
+```python
+#!/usr/bin/env python3
+"""
+创建数据库表的脚本
+运行此脚本来创建/更新数据库表结构
+"""
+
+import sys
+import os
+
+# 添加项目路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'asr_system_backend'))
+
+from app.database import engine
+from app.models import Base
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def create_tables():
+    """创建所有数据表"""
+    try:
+        logger.info("正在创建数据库表...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ 数据库表创建成功")
+        
+        # 打印创建的表
+        inspector = engine.inspect(engine)
+        tables = inspector.get_table_names()
+        logger.info(f"已创建的表: {', '.join(tables)}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ 数据库表创建失败: {e}")
+        return False
+
+if __name__ == "__main__":
+    success = create_tables()
+    if success:
+        print("🎉 数据库初始化完成！")
+    else:
+        print("❌ 数据库初始化失败")
+        sys.exit(1)
+```
+
+--------------------------------------------------------------------------------
+
 File: asr_system_backend/README.md
 ```markdown
 ## 用户认证API说明
@@ -8194,7 +8716,24 @@ load_dotenv()
 
 class Settings:
     """应用配置设置"""
+     # 阿里云DashScope配置 (DeepSeek)
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+     # DeepSeek聊天模型配置
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "deepseek-v2-chat")
+    CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "4000"))
+    CHAT_TEMPERATURE: float = float(os.getenv("CHAT_TEMPERATURE", "0.7"))
+    CHAT_TOP_P: float = float(os.getenv("CHAT_TOP_P", "0.8"))
     
+    @property
+    def chat_config(self) -> dict:
+        """获取聊天服务配置"""
+        return {
+            "model": self.CHAT_MODEL,
+            "max_tokens": self.CHAT_MAX_TOKENS,
+            "temperature": self.CHAT_TEMPERATURE,
+            "top_p": self.CHAT_TOP_P,
+            "provider": "DeepSeek via DashScope"
+        }
     # 数据库配置
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./asr_system.db")
     
@@ -9044,7 +9583,7 @@ File: asr_system_backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # 1. 导入我们所有需要的路由模块
-from .routers import transcription, auth, realtime_websocket, polling_ws_realtime
+from .routers import transcription, auth, realtime_websocket, chat
 from .models import Base, engine
 from .config import get_settings
 
@@ -9071,6 +9610,7 @@ app.include_router(auth.router, tags=["认证"])
 app.include_router(transcription.router, tags=["转写"]) 
 # 确保这一行是存在的
 app.include_router(realtime_websocket.router, tags=["实时转写"])
+app.include_router(chat.router, tags=["AI聊天"])
 ```
 
 --------------------------------------------------------------------------------
@@ -9195,74 +9735,207 @@ async def transcribe_file(file: UploadFile = File(...)):
 
 File: asr_system_backend/app/routers/chat.py
 ```python
-# 文件: asr_system_backend/app/routers/chat.py
-
 import logging
+import json
+import asyncio
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 import dashscope
-from ..config import get_settings
+from dashscope import Generation
 
-# 配置日志和路由
+from ..config import get_settings
+from ..database import get_db
+from .auth import get_current_user
+from .. import models
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 settings = get_settings()
 
-# 定义请求体模型
 class ChatRequest(BaseModel):
     prompt: str
+    temperature: float = 0.7
+    max_tokens: int = 2000
 
-# 定义一个异步生成器，用于流式传输数据
-async def stream_generator(prompt: str):
-    """
-    调用DeepSeek API并以流式方式返回结果
-    """
-    # 从配置中获取API Key
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant" or "system"
+    content: str
+
+async def stream_generator(prompt: str, temperature: float = 0.7, max_tokens: int = 2000):
+    """使用阿里云通义千问生成流式聊天响应"""
     api_key = settings.DASHSCOPE_API_KEY
     if not api_key:
         logger.error("DashScope API Key 未配置")
-        # 直接在流中返回错误信息
-        yield "Error: Server's API Key is not configured."
+        yield "data: " + json.dumps({"error": "服务端未配置API Key"}) + "\n\n"
         return
 
     dashscope.api_key = api_key
 
     try:
-        # 调用DeepSeek模型的流式生成接口
-        responses = dashscope.Generation.call(
-            model='deepseek-v2-chat',
-            prompt=prompt,
+        # 使用通义千问模型
+        responses = Generation.call(
+            model='qwen-plus',  # 使用稳定的通义千问Plus模型
+            messages=[
+                {"role": "system", "content": "你是一个智能助手，能够准确理解用户的语音转写内容并给出有帮助的回复。请用简洁明了的语言回答问题。"},
+                {"role": "user", "content": prompt}
+            ],
+            result_format='message',
             stream=True,
-            incremental_output=True # 增量输出，实现打字机效果
+            incremental_output=True,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=0.8,
         )
-
+        
         for resp in responses:
             if resp.status_code == 200:
-                content = resp.output.choices[0]['message']['content']
-                yield content # 将每个增量内容块发送给前端
+                # 处理通义千问的响应格式
+                if hasattr(resp.output, 'choices') and len(resp.output.choices) > 0:
+                    choice = resp.output.choices[0]
+                    if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
+                        content = choice.message.content
+                        if content:  # 确保内容不为空
+                            yield f"data: {json.dumps({'content': content, 'model': 'qwen-plus'})}\n\n"
+                # 兼容其他响应格式
+                elif hasattr(resp.output, 'text') and resp.output.text:
+                    content = resp.output.text
+                    yield f"data: {json.dumps({'content': content, 'model': 'qwen-plus'})}\n\n"
             else:
-                error_msg = f"Error: code: {resp.status_code}, message: {resp.message}"
+                error_msg = f"通义千问 API Error: {resp.code} - {resp.message}"
                 logger.error(error_msg)
-                yield error_msg
+                yield f"data: {json.dumps({'error': error_msg})}\n\n"
                 break
+                
+        # 发送结束标记
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        
     except Exception as e:
-        logger.error(f"调用DashScope API时出错: {e}")
-        yield f"Error: An exception occurred while calling the AI service."
+        logger.error(f"调用通义千问 API时出错: {e}")
+        yield f"data: {json.dumps({'error': f'调用AI服务时发生异常: {str(e)}'})}\n\n"
 
-# 定义流式API端点
 @router.post("/stream")
-async def stream_chat(request: ChatRequest):
-    """
-    接收前端的Prompt，并以流式方式返回DeepSeek模型的响应
-    """
-    if not request.prompt:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Prompt不能为空"
-        )
+async def stream_chat(
+    request: ChatRequest,
+    current_user: models.User = Depends(get_current_user)
+):
+    """流式聊天接口"""
+    if not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt不能为空")
     
-    return StreamingResponse(stream_generator(request.prompt), media_type="text/event-stream")
+    logger.info(f"用户 {current_user.username} 发起聊天: {request.prompt[:50]}...")
+    
+    return StreamingResponse(
+        stream_generator(request.prompt, request.temperature, request.max_tokens),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+@router.get("/models")
+async def get_available_models():
+    """获取可用的聊天模型"""
+    return {
+        "models": [
+            {
+                "name": "qwen-plus", 
+                "description": "通义千问Plus - 平衡性能与成本",
+                "provider": "Alibaba DashScope"
+            },
+            {
+                "name": "qwen-turbo", 
+                "description": "通义千问Turbo - 快速响应",
+                "provider": "Alibaba DashScope"
+            },
+            {
+                "name": "qwen-max", 
+                "description": "通义千问Max - 最强性能",
+                "provider": "Alibaba DashScope"
+            }
+        ],
+        "current": "qwen-plus",
+        "provider": "Alibaba DashScope"
+    }
+
+@router.get("/health")
+async def chat_health_check():
+    """聊天服务健康检查"""
+    api_key = settings.DASHSCOPE_API_KEY
+    
+    # 测试API连接
+    if api_key:
+        try:
+            dashscope.api_key = api_key
+            # 发送一个简单的测试请求
+            test_response = Generation.call(
+                model='qwen-turbo',
+                prompt='测试',
+                max_tokens=10
+            )
+            api_working = test_response.status_code == 200
+        except Exception as e:
+            logger.error(f"API测试失败: {e}")
+            api_working = False
+    else:
+        api_working = False
+    
+    return {
+        "status": "healthy" if api_working else "api_error",
+        "model": "qwen-plus",
+        "api_configured": bool(api_key),
+        "api_working": api_working
+    }
+
+# 非流式聊天接口（可选）
+@router.post("/simple")
+async def simple_chat(
+    request: ChatRequest,
+    current_user: models.User = Depends(get_current_user)
+):
+    """非流式聊天接口"""
+    if not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt不能为空")
+    
+    api_key = settings.DASHSCOPE_API_KEY
+    if not api_key:
+        raise HTTPException(status_code=500, detail="API Key未配置")
+    
+    dashscope.api_key = api_key
+    
+    try:
+        response = Generation.call(
+            model='qwen-plus',
+            messages=[
+                {"role": "system", "content": "你是一个智能助手，能够准确理解用户的语音转写内容并给出有帮助的回复。"},
+                {"role": "user", "content": request.prompt}
+            ],
+            result_format='message',
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        
+        if response.status_code == 200:
+            if hasattr(response.output, 'choices') and len(response.output.choices) > 0:
+                content = response.output.choices[0].message.content
+            else:
+                content = response.output.text
+                
+            return {
+                "response": content,
+                "model": "qwen-plus",
+                "usage": getattr(response.usage, 'total_tokens', 0) if hasattr(response, 'usage') else 0
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"API调用失败: {response.message}")
+            
+    except Exception as e:
+        logger.error(f"聊天API调用失败: {e}")
+        raise HTTPException(status_code=500, detail=f"AI服务调用失败: {str(e)}")
 ```
 
 --------------------------------------------------------------------------------
@@ -11840,6 +12513,8 @@ File: .git/config
 	remote = origin
 	merge = refs/heads/main
 	vscode-merge-base = origin/main
+[pull]
+	rebase = false
 ```
 
 --------------------------------------------------------------------------------
@@ -11854,7 +12529,7 @@ e076f06e191466160a18c4129749553ce100258b refs/remotes/origin/main
 
 File: .git/ORIG_HEAD
 ```text
-6481a932458e144c6fc11d7cd8c3e1deae2083e9
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df
 ```
 
 --------------------------------------------------------------------------------
@@ -11875,7 +12550,7 @@ Unnamed repository; edit this file 'description' to name the repository.
 
 File: .git/FETCH_HEAD
 ```text
-6724e78d9de92025ea2292ac1af3abb3293c8fd7		branch 'main' of github.com:Miki-Riako/asr-system
+d4744ad5e9d0495bf507d60e450008bea92967b1		branch 'main' of github.com:Miki-Riako/asr-system
 ```
 
 --------------------------------------------------------------------------------
@@ -11911,6 +12586,12 @@ e106eb2cd515bc83e8e1123ff617a54b481a7b0b e106eb2cd515bc83e8e1123ff617a54b481a7b0
 e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771217 +0800	commit: commit
 6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771732 +0800	commit: commit
 6481a932458e144c6fc11d7cd8c3e1deae2083e9 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752773646 +0800	reset: moving to origin/main
+6481a932458e144c6fc11d7cd8c3e1deae2083e9 5fd9798d57b7629b80850b18ef63c9d9257379cc ght <ght0719@qq.com> 1752776007 +0800	commit: commit
+5fd9798d57b7629b80850b18ef63c9d9257379cc 73d7908312b07166f2fca9565af95dcbaee198fd ght <ght0719@qq.com> 1752780372 +0800	commit: commit
+73d7908312b07166f2fca9565af95dcbaee198fd c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752780472 +0800	pull origin main: Merge made by the 'ort' strategy.
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752800800 +0800	reset: moving to origin/main
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752802412 +0800	reset: moving to origin/main
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752802613 +0800	reset: moving to origin/main
 ```
 
 --------------------------------------------------------------------------------
@@ -11936,6 +12617,9 @@ c754c505ee78fb4535c05269acd33ebc2fbf8661 09894afad25a2ddf6a20c338d7a766b2fa842fe
 a3c308bb7e5d81b3eb68858d3b0a8d14e5178e1d e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752760891 +0800	commit: update
 e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771217 +0800	commit: commit
 6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771732 +0800	commit: commit
+6481a932458e144c6fc11d7cd8c3e1deae2083e9 5fd9798d57b7629b80850b18ef63c9d9257379cc ght <ght0719@qq.com> 1752776007 +0800	commit: commit
+5fd9798d57b7629b80850b18ef63c9d9257379cc 73d7908312b07166f2fca9565af95dcbaee198fd ght <ght0719@qq.com> 1752780372 +0800	commit: commit
+73d7908312b07166f2fca9565af95dcbaee198fd c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752780472 +0800	pull origin main: Merge made by the 'ort' strategy.
 ```
 
 --------------------------------------------------------------------------------
@@ -11950,6 +12634,10 @@ c754c505ee78fb4535c05269acd33ebc2fbf8661 09894afad25a2ddf6a20c338d7a766b2fa842fe
 09894afad25a2ddf6a20c338d7a766b2fa842fec e106eb2cd515bc83e8e1123ff617a54b481a7b0b ght <ght0719@qq.com> 1752760916 +0800	update by push
 e106eb2cd515bc83e8e1123ff617a54b481a7b0b 6724e78d9de92025ea2292ac1af3abb3293c8fd7 ght <ght0719@qq.com> 1752771352 +0800	update by push
 6724e78d9de92025ea2292ac1af3abb3293c8fd7 6481a932458e144c6fc11d7cd8c3e1deae2083e9 ght <ght0719@qq.com> 1752771751 +0800	update by push
+6481a932458e144c6fc11d7cd8c3e1deae2083e9 c003b85b9a2747598033432f7f6cca3a561faac4 ght <ght0719@qq.com> 1752776033 +0800	pull --tags origin main: fast-forward
+c003b85b9a2747598033432f7f6cca3a561faac4 5fd9798d57b7629b80850b18ef63c9d9257379cc ght <ght0719@qq.com> 1752776433 +0800	update by push
+5fd9798d57b7629b80850b18ef63c9d9257379cc d4744ad5e9d0495bf507d60e450008bea92967b1 ght <ght0719@qq.com> 1752780387 +0800	pull --tags origin main: fast-forward
+d4744ad5e9d0495bf507d60e450008bea92967b1 c2edeadb8a58d2014fdf1675d27840cca7a7f4df ght <ght0719@qq.com> 1752780508 +0800	update by push
 ```
 
 --------------------------------------------------------------------------------
@@ -12843,14 +13531,14 @@ File: .git/info/exclude
 
 File: .git/refs/heads/main
 ```text
-6481a932458e144c6fc11d7cd8c3e1deae2083e9
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df
 ```
 
 --------------------------------------------------------------------------------
 
 File: .git/refs/remotes/origin/main
 ```text
-6481a932458e144c6fc11d7cd8c3e1deae2083e9
+c2edeadb8a58d2014fdf1675d27840cca7a7f4df
 ```
 
 --------------------------------------------------------------------------------
