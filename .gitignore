@@ -10,6 +10,7 @@ asr_system.db
 .frontend.pid
 
 my_output.txt
+users.json
 
 *.pt
 
