@@ -74,6 +74,8 @@
                 <div v-for="(item, index) in chatHistory" :key="index" :class="item.role === 'user' ? 'user-message' : 'assistant-message'">
                     <div class="message-bubble" :class="item.role">
                         <pre class="whitespace-pre-wrap font-sans">{{ item.content }}</pre>
+                        <!-- 时间戳显示在右下角 -->
+                        <span class="message-time">{{ item.time }}</span>
                     </div>
                 </div>
             </div>
@@ -99,7 +101,7 @@
       </div>
     </main>
   </div>
-</template>```
+</template>
 
 <script setup>
 import { ref, computed, onUnmounted, nextTick } from 'vue';
@@ -208,14 +210,16 @@ const sendPrompt = async () => {
 
     isLoading.value = true;
     const currentPrompt = promptText.value;
-    chatHistory.value.push({ role: 'user', content: currentPrompt });
+    // 增加时间字段
+    chatHistory.value.push({ role: 'user', content: currentPrompt, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
     promptText.value = '';
 
     await nextTick();
     scrollToBottom();
 
     const assistantMessageIndex = chatHistory.value.length;
-    chatHistory.value.push({ role: 'assistant', content: '' });
+    // 增加时间字段
+    chatHistory.value.push({ role: 'assistant', content: '', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
 
     try {
         const response = await fetch('/api/chat/stream', {
@@ -368,6 +372,7 @@ const scrollToBottom = () => {
   border-radius: 1rem;
   line-height: 1.6;
   font-size: 1rem;
+  position: relative; /* 新增 */
 }
 .message-bubble.user {
   background-color: #3b82f6;
@@ -378,5 +383,13 @@ const scrollToBottom = () => {
   background-color: #4b5563;
   color: #e5e7eb;
   border-bottom-left-radius: 0.25rem;
+}
+.message-time {
+  position: absolute;
+  right: 12px;
+  bottom: 6px;
+  font-size: 0.75em;
+  color: #bdbdbd;
+  opacity: 0.7;
 }
 </style>
