@@ -1,57 +1,53 @@
 import axios from 'axios';
 
-// 配置axios基础URL - 使用相对路径，依赖vite的代理配置
-axios.defaults.withCredentials = true;  // 允许跨域请求携带凭证
+// 关键：确保所有API请求都指向后端服务器
+axios.defaults.baseURL = 'http://localhost:8080';
 
-// WebSocket URL配置 - 使用相对路径
-const WS_BASE_URL = '';  // 空字符串表示使用相对路径
-
-// 请求拦截器：添加认证token
-// 确保拦截器正常工作
-axios.interceptors.request.use(config => {
-  const token = localStorage.getItem('token');
-  config.headers.Authorization = `Bearer ${token}`; // 需要确认token存在
-  return config;
-});
-
-// 响应拦截器：处理401错误
-axios.interceptors.response.use(
-  (response) => {
-    return response;
+// 请求拦截器：自动添加token
+axios.interceptors.request.use(
+  config => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
   },
-  (error) => {
+  error => Promise.reject(error)
+);
+
+// 响应拦截器：处理401未授权错误
+axios.interceptors.response.use(
+  response => response,
+  error => {
     if (error.response && error.response.status === 401) {
-      // Token过期或无效，清除本地存储并跳转到登录页
       localStorage.removeItem('token');
-      localStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);
   }
 );
 
-// Auth API
 export const authAPI = {
+  /**
+   * 【极简版登录】
+   * 发送包含用户名和密码的 JSON 对象。
+   */
   login: async (username, password) => {
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-    const response = await axios.post('/auth/token', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+    const response = await axios.post('/auth/token', {
+      username: username,
+      password: password
     });
     return response.data;
   },
   
+  /**
+   * 【极简版注册】
+   * 发送包含用户名和密码的 JSON 对象。
+   */
   register: async (username, password) => {
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-    const response = await axios.post('/auth/register', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+    const response = await axios.post('/auth/register', {
+      username: username,
+      password: password
     });
     return response.data;
   },
@@ -62,7 +58,7 @@ export const authAPI = {
   }
 };
 
-// Transcription API
+// --- 其他API部分保持不变 ---
 export const transcriptionAPI = {
   submitTask: async (file, hotwordListId = null) => {
     const formData = new FormData();
@@ -70,49 +66,9 @@ export const transcriptionAPI = {
     if (hotwordListId) {
       formData.append('hotword_list_id', hotwordListId);
     }
-    
     const response = await axios.post('/asr/transcribe/file', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+      headers: { 'Content-Type': 'multipart/form-data' }
     });
-    
-    return response.data;
-  }
-};
-
-// Hotwords API
-export const hotwordAPI = {
-  createHotword: async (word, weight) => {
-    const response = await axios.post('/hotwords', { word, weight });
-    return response.data;
-  },
-  
-  getUserHotwords: async (skip = 0, limit = 100) => {
-    const response = await axios.get(`/hotwords?skip=${skip}&limit=${limit}`);
-    return response.data;
-  },
-  
-  updateHotword: async (hotwordId, data) => {
-    const response = await axios.put(`/hotwords/${hotwordId}`, data);
-    return response.data;
-  },
-  
-  deleteHotword: async (hotwordId) => {
-    const response = await axios.delete(`/hotwords/${hotwordId}`);
-    return response.data;
-  },
-  
-  importHotwords: async (file) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    const response = await axios.post('/hotwords/import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
-    
     return response.data;
   }
 };

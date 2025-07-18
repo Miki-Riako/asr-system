@@ -1,86 +1,95 @@
+# File: asr_system_backend/app/routers/auth.py (FINAL & SIMPLEST VERSION)
+
+import json
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
-from ..models import SessionLocal, User
-from ..auth_service import verify_password, get_password_hash, create_access_token, decode_access_token
-from ..config import get_settings
+from .. import schemas, auth_service  # 确保 schemas 和 auth_service 被导入
 
+# --- 配置 ---
+# 我们将把用户信息直接存储在这个JSON文件里
+USERS_FILE = "users.json"
 router = APIRouter(prefix="/auth", tags=["认证"])
-settings = get_settings()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+# --- 辅助函数 ---
+def load_users():
+    """从 users.json 加载用户数据"""
+    if not os.path.exists(USERS_FILE):
+        return {}
+    with open(USERS_FILE, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
 
-# 依赖项：获取数据库会话
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def save_users(users_data):
+    """将用户数据保存到 users.json"""
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users_data, f, indent=4)
+
+# --- API 接口 ---
 
 @router.post("/register")
-def register(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    # 检查用户是否已存在
-    db_user = db.query(User).filter(User.username == form_data.username).first()
-    if db_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名已存在"
-        )
+def register(user_in: schemas.UserCreate):
+    """
+    【极简版注册】
+    - 接收 JSON: { "username": "...", "password": "..." }
+    """
+    users = load_users()
+    if user_in.username in users:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
     
-    # 创建新用户
-    hashed_password = get_password_hash(form_data.password)
-    db_user = User(username=form_data.username, hashed_password=hashed_password)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    # 直接存储明文密码，保持绝对简单
+    users[user_in.username] = {"password": user_in.password}
+    save_users(users)
     
-    # 生成访问令牌
-    access_token = create_access_token(
-        data={"sub": db_user.username}
-    )
+    # 注册成功后直接返回一个token，让用户能自动登录
+    access_token = auth_service.create_access_token(data={"sub": user_in.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.post("/token")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    # 验证用户
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+
+@router.post("/token", response_model=schemas.Token)
+def login(user_in: schemas.UserLogin):
+    """
+    【极简版登录】
+    - 接收 JSON: { "username": "...", "password": "..." }
+    """
+    users = load_users()
+    user = users.get(user_in.username)
+    
+    if not user or user.get("password") != user_in.password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # 生成访问令牌
-    access_token = create_access_token(
-        data={"sub": user.username}
-    )
+    access_token = auth_service.create_access_token(data={"sub": user_in.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 获取当前用户
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+
+# --- 以下部分保持不变，用于验证Token ---
+from fastapi.security import OAuth2PasswordBearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="无效的认证凭证",
+        detail="无效的认证凭据",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = decode_access_token(token)
+        payload = auth_service.decode_access_token(token)
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-    except:
+    except Exception:
         raise credentials_exception
     
-    user = db.query(User).filter(User.username == username).first()
-    if user is None:
+    users = load_users()
+    if username not in users:
         raise credentials_exception
-    return user
+    return {"username": username}
 
 @router.get("/me")
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return {
-        "username": current_user.username,
-        "created_at": current_user.created_at.isoformat()
-    }
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    return current_user
