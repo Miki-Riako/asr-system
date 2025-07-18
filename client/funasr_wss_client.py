@@ -3,18 +3,64 @@ import os
 import time
 import websockets, ssl
 import asyncio
-
-# import threading
 import argparse
 import json
 import traceback
 from multiprocessing import Process
-
-# from funasr.fileio.datadir_writer import DatadirWriter
+from queue import Queue
 
 import logging
-
 logging.basicConfig(level=logging.ERROR)
+
+
+# --- 新增：自动定位项目根目录下的hotwords.txt ---
+# 假设此脚本位于 "client" 文件夹内，项目根目录是其上一级
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+    HOTWORD_FILE_PATH = os.path.join(PROJECT_ROOT, 'hotwords.txt')
+except NameError:
+    # 在某些交互式环境 __file__ 可能未定义
+    HOTWORD_FILE_PATH = "hotwords.txt"
+
+
+# --- 新增：重构的热词加载函数 ---
+def _load_hotwords(file_path):
+    """
+    从指定路径加载热词文件，并返回JSON格式的字符串。
+    如果文件不存在或内容格式不正确，则返回空字符串。
+    """
+    if not os.path.exists(file_path):
+        # print(f"Info: Hotword file not found at '{file_path}'. Proceeding without hotwords.")
+        return ""
+
+    fst_dict = {}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                words = line.split()
+                if len(words) < 2:
+                    print(f"Warning: Hotword line format error, skipping: '{line}'")
+                    continue
+                try:
+                    # 将除最后一个词外的所有部分作为热词，最后一个词作为权重
+                    fst_dict[" ".join(words[:-1])] = int(words[-1])
+                except ValueError:
+                    print(f"Warning: Hotword weight format error, skipping: '{line}'")
+                    continue
+        if fst_dict:
+            print(f"Successfully loaded hotwords from '{file_path}'")
+            return json.dumps(fst_dict)
+        else:
+            return ""
+    except Exception as e:
+        print(f"Error loading hotword file '{file_path}': {e}")
+        return ""
+
+# --- 原有代码，但进行修改 ---
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -25,12 +71,7 @@ parser.add_argument("--chunk_size", type=str, default="5, 10, 5", help="chunk")
 parser.add_argument("--encoder_chunk_look_back", type=int, default=4, help="chunk")
 parser.add_argument("--decoder_chunk_look_back", type=int, default=0, help="chunk")
 parser.add_argument("--chunk_interval", type=int, default=10, help="chunk")
-parser.add_argument(
-    "--hotword",
-    type=str,
-    default="",
-    help="hotword file path, one hotword perline (e.g.:阿里巴巴 20)",
-)
+# parser.add_argument("--hotword",... # 已移除此行
 parser.add_argument("--audio_in", type=str, default=None, help="audio_in")
 parser.add_argument("--audio_fs", type=int, default=16000, help="audio_fs")
 parser.add_argument(
@@ -49,16 +90,11 @@ parser.add_argument("--mode", type=str, default="2pass", help="offline, online, 
 args = parser.parse_args()
 args.chunk_size = [int(x) for x in args.chunk_size.split(",")]
 print(args)
-# voices = asyncio.Queue()
-from queue import Queue
 
 voices = Queue()
 offline_msg_done = False
 
 if args.output_dir is not None:
-    # if os.path.exists(args.output_dir):
-    #     os.remove(args.output_dir)
-
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
@@ -66,8 +102,7 @@ if args.output_dir is not None:
 async def record_microphone():
     is_finished = False
     import pyaudio
-
-    # print("2")
+    
     global voices
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
@@ -80,25 +115,9 @@ async def record_microphone():
     stream = p.open(
         format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK
     )
-    # hotwords
-    fst_dict = {}
-    hotword_msg = ""
-    if args.hotword.strip() != "":
-        if os.path.exists(args.hotword):
-            f_scp = open(args.hotword)
-            hot_lines = f_scp.readlines()
-            for line in hot_lines:
-                words = line.strip().split(" ")
-                if len(words) < 2:
-                    print("Please checkout format of hotwords")
-                    continue
-                try:
-                    fst_dict[" ".join(words[:-1])] = int(words[-1])
-                except ValueError:
-                    print("Please checkout format of hotwords")
-            hotword_msg = json.dumps(fst_dict)
-        else:
-            hotword_msg = args.hotword
+    
+    # --- 修改：调用新的热词加载函数 ---
+    hotword_msg = _load_hotwords(HOTWORD_FILE_PATH)
 
     use_itn = True
     if args.use_itn == 0:
@@ -117,12 +136,10 @@ async def record_microphone():
             "itn": use_itn,
         }
     )
-    # voices.put(message)
     await websocket.send(message)
     while True:
         data = stream.read(CHUNK)
         message = data
-        # voices.put(message)
         await websocket.send(message)
         await asyncio.sleep(0.005)
 
@@ -136,26 +153,8 @@ async def record_from_scp(chunk_begin, chunk_size):
     else:
         wavs = [args.audio_in]
 
-    # hotwords
-    fst_dict = {}
-    hotword_msg = ""
-    if args.hotword.strip() != "":
-        if os.path.exists(args.hotword):
-            f_scp = open(args.hotword)
-            hot_lines = f_scp.readlines()
-            for line in hot_lines:
-                words = line.strip().split(" ")
-                if len(words) < 2:
-                    print("Please checkout format of hotwords")
-                    continue
-                try:
-                    fst_dict[" ".join(words[:-1])] = int(words[-1])
-                except ValueError:
-                    print("Please checkout format of hotwords")
-            hotword_msg = json.dumps(fst_dict)
-        else:
-            hotword_msg = args.hotword
-        print(hotword_msg)
+    # --- 修改：调用新的热词加载函数 ---
+    hotword_msg = _load_hotwords(HOTWORD_FILE_PATH)
 
     sample_rate = args.audio_fs
     wav_format = "pcm"
@@ -190,8 +189,7 @@ async def record_from_scp(chunk_begin, chunk_size):
 
         stride = int(60 * args.chunk_size[1] / args.chunk_interval / 1000 * sample_rate * 2)
         chunk_num = (len(audio_bytes) - 1) // stride + 1
-        # print(stride)
-
+        
         # send first time
         message = json.dumps(
             {
@@ -204,12 +202,11 @@ async def record_from_scp(chunk_begin, chunk_size):
                 "wav_name": wav_name,
                 "wav_format": wav_format,
                 "is_speaking": True,
-                "hotwords": hotword_msg,
+                "hotwords": hotword_msg, # 使用加载好的热词
                 "itn": use_itn,
             }
         )
-
-        # voices.put(message)
+        
         await websocket.send(message)
         is_speaking = True
         for i in range(chunk_num):
@@ -217,12 +214,10 @@ async def record_from_scp(chunk_begin, chunk_size):
             beg = i * stride
             data = audio_bytes[beg : beg + stride]
             message = data
-            # voices.put(message)
             await websocket.send(message)
             if i == chunk_num - 1:
                 is_speaking = False
                 message = json.dumps({"is_speaking": is_speaking})
-                # voices.put(message)
                 await websocket.send(message)
 
             sleep_duration = (
@@ -235,8 +230,7 @@ async def record_from_scp(chunk_begin, chunk_size):
 
     if not args.mode == "offline":
         await asyncio.sleep(2)
-    # offline model need to wait for message recved
-
+    
     if args.mode == "offline":
         global offline_msg_done
         while not offline_msg_done:
@@ -258,7 +252,6 @@ async def message(id):
         ibest_writer = None
     try:
         while True:
-
             meg = await websocket.recv()
             meg = json.loads(meg)
             wav_name = meg.get("wav_name", "demo")
@@ -287,9 +280,6 @@ async def message(id):
                     text_print += "{} timestamp: {}".format(text, timestamp)
                 else:
                     text_print += "{}".format(text)
-
-                # text_print = text_print[-args.words_max_print:]
-                # os.system('clear')
                 print("\rpid" + str(id) + ": " + wav_name + ": " + text_print)
                 offline_msg_done = True
             else:
@@ -303,12 +293,11 @@ async def message(id):
                 text_print = text_print[-args.words_max_print :]
                 os.system("clear")
                 print("\rpid" + str(id) + ": " + text_print)
-                # offline_msg_done=True
 
     except Exception as e:
-        print("Exception:", e)
-        # traceback.print_exc()
-        # await websocket.close()
+        # 忽略正常的连接关闭异常
+        if not isinstance(e, websockets.exceptions.ConnectionClosedOK) and not isinstance(e, websockets.exceptions.ConnectionClosedError):
+             print("Exception:", e)
 
 
 async def ws_client(id, chunk_begin, chunk_size):
@@ -336,58 +325,57 @@ async def ws_client(id, chunk_begin, chunk_size):
                 task = asyncio.create_task(record_from_scp(i, 1))
             else:
                 task = asyncio.create_task(record_microphone())
-            task3 = asyncio.create_task(message(str(id) + "_" + str(i)))  # processid+fileid
+            task3 = asyncio.create_task(message(str(id) + "_" + str(i)))
             await asyncio.gather(task, task3)
     exit(0)
 
 
 def one_thread(id, chunk_begin, chunk_size):
-    asyncio.get_event_loop().run_until_complete(ws_client(id, chunk_begin, chunk_size))
-    asyncio.get_event_loop().run_forever()
+    # For Windows, create a new event loop for each process
+    if os.name == 'nt':
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(ws_client(id, chunk_begin, chunk_size))
+    loop.run_forever()
 
 
 if __name__ == "__main__":
-    # for microphone
     if args.audio_in is None:
         p = Process(target=one_thread, args=(0, 0, 0))
         p.start()
         p.join()
         print("end")
     else:
-        # calculate the number of wavs for each preocess
         if args.audio_in.endswith(".scp"):
             f_scp = open(args.audio_in)
             wavs = f_scp.readlines()
         else:
             wavs = [args.audio_in]
-        for wav in wavs:
-            wav_splits = wav.strip().split()
-            wav_name = wav_splits[0] if len(wav_splits) > 1 else "demo"
-            wav_path = wav_splits[1] if len(wav_splits) > 1 else wav_splits[0]
-            audio_type = os.path.splitext(wav_path)[-1].lower()
-
+        
         total_len = len(wavs)
         if total_len >= args.thread_num:
-            chunk_size = int(total_len / args.thread_num)
-            remain_wavs = total_len - chunk_size * args.thread_num
+            chunk_size = total_len // args.thread_num
+            remain_wavs = total_len % args.thread_num
         else:
+            # 如果文件数小于线程数，则每个线程处理一个文件，多余线程空闲
+            args.thread_num = total_len
             chunk_size = 1
             remain_wavs = 0
 
         process_list = []
         chunk_begin = 0
         for i in range(args.thread_num):
-            now_chunk_size = chunk_size
-            if remain_wavs > 0:
-                now_chunk_size = chunk_size + 1
-                remain_wavs = remain_wavs - 1
-            # process i handle wavs at chunk_begin and size of now_chunk_size
+            if chunk_begin >= total_len:
+                break
+            now_chunk_size = chunk_size + 1 if i < remain_wavs else chunk_size
+            
             p = Process(target=one_thread, args=(i, chunk_begin, now_chunk_size))
-            chunk_begin = chunk_begin + now_chunk_size
+            chunk_begin += now_chunk_size
             p.start()
             process_list.append(p)
 
-        for i in process_list:
+        for p in process_list:
             p.join()
 
         print("end")
